@@ -1,0 +1,377 @@
+//! # Traffic Assignment Module (Step 4)
+//!
+//! Assigns OD demand to the network to find User Equilibrium
+//! (Wardrop's first principle: no traveller can reduce their travel
+//! time by unilaterally changing routes).
+//!
+//! ## Methods
+//!
+//! | Method | Step size | Path storage | Convergence |
+//! |---|---|---|---|
+//! | [`FrankWolfe`] | Bisection line search | None (link-based) | Typically good |
+//! | [`Msa`] | Fixed 1/n | None (link-based) | Slower, simpler |
+//! | [`GradientProjection`] | Gradient-scaled | Explicit path sets | Path-level detail |
+//!
+//! All three implement [`AssignmentMethod`], so they are interchangeable.
+//!
+//! ## Volume-delay function
+//!
+//! The BPR function models congestion:
+//!
+//! ```text
+//! t(x) = t0 * (1 + alpha * (x / c) ^ beta)
+//! ```
+//!
+//! Default parameters: `alpha = 0.15`, `beta = 4.0`.
+//!
+//! ## Components
+//!
+//! - [`AssignmentMethod`] - Trait for assignment algorithms
+//! - [`VolumeDelayFunction`] - Trait for volume-delay functions
+//! - [`BprFunction`] - BPR implementation
+//! - [`AssignmentConfig`] - Iteration/convergence settings
+//! - [`AssignmentResult`] - Output volumes, costs, convergence info
+//! - [`shortest_path`] - Dijkstra, all-or-nothing, skim computation
+//! - [`error`] - Assignment error types
+//!
+//! ## Examples
+//!
+//! ### BPR volume-delay function
+//!
+//! ```
+//! use macro_traffic_sim_core::assignment::{BprFunction, VolumeDelayFunction};
+//!
+//! let bpr = BprFunction::default();
+//!
+//! // Free-flow: 10 min, no volume
+//! assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0), 10.0);
+//!
+//! // At capacity: t = 10 * (1 + 0.15 * 1^4) = 11.5
+//! assert!((bpr.travel_time(10.0, 1000.0, 1000.0) - 11.5).abs() < 1e-10);
+//!
+//! // Over capacity: congestion grows rapidly
+//! assert!(bpr.travel_time(10.0, 2000.0, 1000.0) > 11.5);
+//! ```
+//!
+//! ### Computing the relative gap
+//!
+//! ```
+//! use std::collections::HashMap;
+//! use macro_traffic_sim_core::assignment::compute_relative_gap;
+//!
+//! let volumes = HashMap::from([(1, 100.0), (2, 200.0)]);
+//! let costs = HashMap::from([(1, 5.0), (2, 10.0)]);
+//!
+//! // If auxiliary volumes equal current volumes, gap = 0
+//! let gap = compute_relative_gap(&volumes, &costs, &volumes);
+//! assert_eq!(gap, 0.0);
+//! ```
+pub mod error;
+pub mod frank_wolfe;
+pub mod gradient_projection;
+pub mod msa;
+pub mod shortest_path;
+
+pub use self::{frank_wolfe::*, gradient_projection::*, msa::*, shortest_path::*};
+
+use std::collections::HashMap;
+
+use self::error::AssignmentError;
+use crate::gmns::meso::network::Network;
+use crate::gmns::types::LinkID;
+use crate::od::OdMatrix;
+
+/// Trait for volume-delay functions.
+///
+/// Models the relationship between link volume and travel time.
+/// Implementations must also provide the integral (needed for the
+/// Beckmann objective in Frank-Wolfe).
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::{BprFunction, VolumeDelayFunction};
+///
+/// let bpr = BprFunction::new(0.15, 4.0);
+///
+/// // Zero volume -> free-flow time
+/// assert_eq!(bpr.travel_time(5.0, 0.0, 500.0), 5.0);
+///
+/// // Integral at zero volume is zero
+/// assert_eq!(bpr.integral(5.0, 0.0, 500.0), 0.0);
+/// ```
+pub trait VolumeDelayFunction {
+    /// Compute travel time given free-flow time, volume, and capacity.
+    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64;
+
+    /// Compute the integral of the VDF from 0 to volume.
+    /// Needed for the Beckmann objective function in Frank-Wolfe.
+    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64;
+}
+
+/// BPR (Bureau of Public Roads) volume-delay function.
+///
+/// `t(x) = t0 * (1 + alpha * (x / c) ^ beta)`
+///
+/// Returns `f64::INFINITY` when capacity is zero or negative.
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::{BprFunction, VolumeDelayFunction};
+///
+/// // Default: alpha=0.15, beta=4.0
+/// let bpr = BprFunction::default();
+/// assert_eq!(bpr.alpha, 0.15);
+/// assert_eq!(bpr.beta, 4.0);
+///
+/// // Custom parameters
+/// let bpr = BprFunction::new(0.20, 5.0);
+/// assert_eq!(bpr.alpha, 0.20);
+/// ```
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::{BprFunction, VolumeDelayFunction};
+///
+/// let bpr = BprFunction::default();
+///
+/// // Volume/capacity = 0.5 -> mild delay
+/// let t = bpr.travel_time(10.0, 500.0, 1000.0);
+/// // t = 10 * (1 + 0.15 * 0.5^4) = 10 * 1.009375 = 10.09375
+/// assert!((t - 10.09375).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct BprFunction {
+    /// Alpha parameter.
+    pub alpha: f64,
+    /// Beta parameter.
+    pub beta: f64,
+}
+
+impl BprFunction {
+    /// Create a BPR function with custom parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::assignment::BprFunction;
+    ///
+    /// let bpr = BprFunction::new(0.25, 5.0);
+    /// assert_eq!(bpr.alpha, 0.25);
+    /// assert_eq!(bpr.beta, 5.0);
+    /// ```
+    pub fn new(alpha: f64, beta: f64) -> Self {
+        BprFunction { alpha, beta }
+    }
+}
+
+impl Default for BprFunction {
+    fn default() -> Self {
+        BprFunction {
+            alpha: 0.15,
+            beta: 4.0,
+        }
+    }
+}
+
+impl VolumeDelayFunction for BprFunction {
+    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        free_flow_time * (1.0 + self.alpha * (volume / capacity).powf(self.beta))
+    }
+
+    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        let ratio = volume / capacity;
+        free_flow_time
+            * (volume + self.alpha * capacity * ratio.powf(self.beta + 1.0) / (self.beta + 1.0))
+    }
+}
+
+/// Configuration for traffic assignment algorithms.
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::AssignmentConfig;
+///
+/// // Default: 100 iterations, gap 1e-4
+/// let config = AssignmentConfig::default();
+/// assert_eq!(config.max_iterations, 100);
+/// assert_eq!(config.convergence_gap, 1e-4);
+/// ```
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::AssignmentConfig;
+///
+/// let config = AssignmentConfig {
+///     max_iterations: 500,
+///     convergence_gap: 1e-6,
+/// };
+/// assert_eq!(config.max_iterations, 500);
+/// ```
+#[derive(Debug, Clone)]
+pub struct AssignmentConfig {
+    /// Maximum number of iterations.
+    pub max_iterations: usize,
+    /// Convergence threshold for relative gap.
+    pub convergence_gap: f64,
+}
+
+impl Default for AssignmentConfig {
+    fn default() -> Self {
+        AssignmentConfig {
+            max_iterations: 100,
+            convergence_gap: 1e-4,
+        }
+    }
+}
+
+/// Result of a traffic assignment.
+///
+/// Contains link-level volumes and costs, plus convergence information.
+#[derive(Debug, Clone)]
+pub struct AssignmentResult {
+    /// Volume on each link.
+    pub link_volumes: HashMap<LinkID, f64>,
+    /// Travel time on each link.
+    pub link_costs: HashMap<LinkID, f64>,
+    /// Number of iterations performed.
+    pub iterations: usize,
+    /// Final relative gap.
+    pub relative_gap: f64,
+    /// Whether the algorithm converged within the gap threshold.
+    pub converged: bool,
+}
+
+/// Trait for traffic assignment methods.
+///
+/// All implementations find User Equilibrium (Wardrop's first principle)
+/// by iteratively adjusting link volumes until no traveller can
+/// unilaterally improve their travel time.
+///
+/// Three methods are available:
+/// - [`FrankWolfe`] - convex combinations with bisection line search
+/// - [`Msa`] - fixed step size 1/n
+/// - [`GradientProjection`] - path-based with gradient flow shifting
+pub trait AssignmentMethod {
+    /// Perform traffic assignment.
+    ///
+    /// # Arguments
+    /// * `network` - The macroscopic network.
+    /// * `od_matrix` - Origin-destination demand matrix.
+    /// * `vdf` - Volume-delay function.
+    /// * `config` - Algorithm configuration.
+    ///
+    /// # Returns
+    /// An [`AssignmentResult`] with link volumes, costs, and convergence info.
+    fn assign(
+        &self,
+        network: &Network,
+        od_matrix: &dyn OdMatrix,
+        vdf: &dyn VolumeDelayFunction,
+        config: &AssignmentConfig,
+    ) -> Result<AssignmentResult, AssignmentError>;
+}
+
+/// Compute link costs from volumes using the VDF.
+///
+/// Iterates over all links in the network and applies the volume-delay
+/// function to compute the travel time for each link.
+pub fn compute_link_costs(
+    network: &Network,
+    volumes: &HashMap<LinkID, f64>,
+    vdf: &dyn VolumeDelayFunction,
+) -> HashMap<LinkID, f64> {
+    let mut costs = HashMap::new();
+    for (&link_id, link) in &network.links {
+        let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
+        let ff_time = link.get_free_flow_time_hours();
+        let capacity = link.get_total_capacity();
+        let cost = vdf.travel_time(ff_time, volume, capacity);
+        costs.insert(link_id, cost);
+    }
+    costs
+}
+
+/// Compute the Beckmann objective function value.
+///
+/// ```text
+/// Z = sum_a integral_0^{x_a} t_a(w) dw
+/// ```
+///
+/// Used by Frank-Wolfe for line search.
+pub fn beckmann_objective(
+    network: &Network,
+    volumes: &HashMap<LinkID, f64>,
+    vdf: &dyn VolumeDelayFunction,
+) -> f64 {
+    let mut objective = 0.0;
+    for (&link_id, link) in &network.links {
+        let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
+        let ff_time = link.get_free_flow_time_hours();
+        let capacity = link.get_total_capacity();
+        objective += vdf.integral(ff_time, volume, capacity);
+    }
+    objective
+}
+
+/// Compute the relative gap for convergence checking.
+///
+/// ```text
+/// gap = (sum(x_a * t_a) - sum(y_a * t_a)) / sum(x_a * t_a)
+/// ```
+///
+/// where `x_a` are current volumes and `y_a` are all-or-nothing
+/// (auxiliary) volumes at current costs. A gap of zero means
+/// User Equilibrium has been reached.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use macro_traffic_sim_core::assignment::compute_relative_gap;
+///
+/// let volumes = HashMap::from([(1, 100.0), (2, 50.0)]);
+/// let costs = HashMap::from([(1, 2.0), (2, 4.0)]);
+///
+/// // Auxiliary with lower total weighted cost
+/// let aux = HashMap::from([(1, 120.0), (2, 30.0)]);
+///
+/// let gap = compute_relative_gap(&volumes, &costs, &aux);
+/// // numerator = 100*2 + 50*4 = 400
+/// // denominator = 120*2 + 30*4 = 360
+/// // gap = (400 - 360) / 400 = 0.1
+/// assert!((gap - 0.1).abs() < 1e-10);
+/// ```
+pub fn compute_relative_gap(
+    volumes: &HashMap<LinkID, f64>,
+    costs: &HashMap<LinkID, f64>,
+    aux_volumes: &HashMap<LinkID, f64>,
+) -> f64 {
+    let numerator: f64 = volumes
+        .iter()
+        .map(|(&link_id, &vol)| {
+            let cost = costs.get(&link_id).copied().unwrap_or(0.0);
+            vol * cost
+        })
+        .sum();
+
+    let denominator: f64 = aux_volumes
+        .iter()
+        .map(|(&link_id, &vol)| {
+            let cost = costs.get(&link_id).copied().unwrap_or(0.0);
+            vol * cost
+        })
+        .sum();
+
+    if numerator <= 0.0 {
+        return 0.0;
+    }
+
+    (numerator - denominator) / numerator
+}

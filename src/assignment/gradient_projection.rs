@@ -1,0 +1,342 @@
+//! # Gradient Projection Algorithm
+//!
+//! Path-based traffic assignment using gradient projection
+//! to find User Equilibrium. Maintains explicit path sets
+//! per OD pair and shifts flow along the gradient direction.
+//!
+//! ## Algorithm
+//!
+//! 1. Initialize: find the shortest path for each OD pair at
+//!    free-flow costs and load all demand onto it.
+//! 2. At each iteration:
+//!    a. Compute link costs from current volumes via the VDF.
+//!    b. Update cost of every stored path.
+//!    c. For each OD pair, find the current shortest path.
+//!       If it is new, add it to the path set.
+//!    d. Shift flow from expensive paths toward the shortest path.
+//!       The shift amount is proportional to `step * cost_diff * flow`,
+//!       where `step = step_scale / sqrt(iteration)`.
+//!    e. Remove paths with negligible flow (< 1e-10).
+//!    f. Recompute link volumes from all path flows.
+//!    g. Check the relative gap -- if below threshold, stop.
+//!
+//! ## Path management
+//!
+//! Each OD pair maintains a set of active paths. New shortest paths
+//! are added to the set as they are discovered. Paths whose flow
+//! drops below `1e-10` are removed (except the current shortest path,
+//! which is always retained). This keeps the path set compact while
+//! still capturing route diversity.
+//!
+//! ## Trade-offs
+//!
+//! - Stores explicit paths per OD pair, enabling path-level analysis.
+//! - More memory than link-based methods (Frank-Wolfe, MSA).
+//! - Each iteration requires one shortest path computation per origin.
+//! - The `step_scale` parameter controls aggressiveness of flow shifting.
+//!   Smaller values are more conservative but may converge slower.
+
+use std::collections::HashMap;
+
+use super::error::AssignmentError;
+use crate::gmns::meso::network::Network;
+use crate::gmns::types::{LinkID, ZoneID};
+use crate::log_additional;
+use crate::log_main;
+use crate::od::OdMatrix;
+use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
+
+use super::{
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction, compute_link_costs,
+    shortest_path::{build_path, dijkstra_one_to_all},
+};
+
+/// A path in the network with associated flow.
+///
+/// Represents one route between an OD pair. The gradient projection
+/// algorithm maintains a set of these per OD pair and shifts flow
+/// between them based on cost differences.
+#[derive(Debug, Clone)]
+struct Path {
+    /// Ordered sequence of link IDs from origin to destination.
+    links: Vec<LinkID>,
+    /// Flow (demand) currently assigned to this path.
+    flow: f64,
+    /// Current travel cost (sum of link costs along the path).
+    cost: f64,
+}
+
+/// Gradient Projection traffic assignment.
+///
+/// Path-based method that maintains explicit path sets per OD pair.
+/// At each iteration, shifts flow from expensive paths to the shortest
+/// path proportional to the cost difference (gradient).
+///
+/// Unlike Frank-Wolfe and MSA, this method stores paths explicitly,
+/// so after convergence you can inspect which routes carry flow.
+///
+/// # Usage
+///
+/// ```text
+/// // Default step_scale = 0.1
+/// let gp = GradientProjection::new();
+///
+/// // Custom step scale for more aggressive shifting
+/// let gp = GradientProjection::with_step_scale(0.2);
+///
+/// let result = gp.assign(&network, &od_matrix, &bpr, &config)?;
+/// ```
+#[derive(Debug)]
+pub struct GradientProjection {
+    /// Step size scaling parameter.
+    ///
+    /// At iteration `n`, the effective step is `step_scale / sqrt(n)`.
+    /// Larger values shift more flow per iteration but may overshoot.
+    /// Default: `0.1`.
+    pub step_scale: f64,
+}
+
+impl GradientProjection {
+    /// Create a new gradient projection instance with default `step_scale = 0.1`.
+    pub fn new() -> Self {
+        GradientProjection { step_scale: 0.1 }
+    }
+
+    /// Create a gradient projection instance with a custom step scale.
+    ///
+    /// # Arguments
+    /// * `step_scale` - Scaling factor for flow shifting. The effective step
+    ///   at iteration `n` is `step_scale / sqrt(n)`.
+    pub fn with_step_scale(step_scale: f64) -> Self {
+        GradientProjection { step_scale }
+    }
+
+    /// Compute the total cost of a path as the sum of its link costs.
+    ///
+    /// Returns `f64::INFINITY` for any link missing from the cost map.
+    fn path_cost(path_links: &[LinkID], link_costs: &HashMap<LinkID, f64>) -> f64 {
+        path_links
+            .iter()
+            .map(|&lid| link_costs.get(&lid).copied().unwrap_or(f64::INFINITY))
+            .sum()
+    }
+
+    /// Compute link volumes by summing flow across all active paths.
+    ///
+    /// Initializes all network links to zero, then accumulates flow
+    /// from every path in every OD pair's path set.
+    fn volumes_from_paths(
+        path_sets: &HashMap<(ZoneID, ZoneID), Vec<Path>>,
+        network: &Network,
+    ) -> HashMap<LinkID, f64> {
+        let mut volumes: HashMap<LinkID, f64> = HashMap::new();
+        for &link_id in network.links.keys() {
+            volumes.insert(link_id, 0.0);
+        }
+        for paths in path_sets.values() {
+            for path in paths {
+                for &link_id in &path.links {
+                    *volumes.entry(link_id).or_insert(0.0) += path.flow;
+                }
+            }
+        }
+        volumes
+    }
+}
+
+impl Default for GradientProjection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AssignmentMethod for GradientProjection {
+    fn assign(
+        &self,
+        network: &Network,
+        od_matrix: &dyn OdMatrix,
+        vdf: &dyn VolumeDelayFunction,
+        config: &AssignmentConfig,
+    ) -> Result<AssignmentResult, AssignmentError> {
+        log_main!(EVENT_ASSIGNMENT, "Starting Gradient Projection assignment",);
+
+        let zone_ids = od_matrix.zone_ids().to_vec();
+
+        let mut costs = compute_link_costs(network, &HashMap::new(), vdf);
+
+        let mut path_sets: HashMap<(ZoneID, ZoneID), Vec<Path>> = HashMap::new();
+
+        for &origin_zone in &zone_ids {
+            let origin_node = match network.get_zone_centroid(origin_zone) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+
+            let spt = dijkstra_one_to_all(network, origin_node, &costs);
+
+            for &dest_zone in &zone_ids {
+                if origin_zone == dest_zone {
+                    continue;
+                }
+
+                let demand = od_matrix.get(origin_zone, dest_zone);
+                if demand <= 0.0 {
+                    continue;
+                }
+
+                let dest_node = match network.get_zone_centroid(dest_zone) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+
+                let path_links = build_path(&spt.predecessors, network, dest_node);
+                if path_links.is_empty() {
+                    continue;
+                }
+
+                let cost = Self::path_cost(&path_links, &costs);
+                path_sets.insert(
+                    (origin_zone, dest_zone),
+                    vec![Path {
+                        links: path_links,
+                        flow: demand,
+                        cost,
+                    }],
+                );
+            }
+        }
+
+        let mut volumes = Self::volumes_from_paths(&path_sets, network);
+        let mut converged = false;
+        let mut relative_gap = f64::MAX;
+        let mut iteration = 0;
+
+        for iter in 0..config.max_iterations {
+            iteration = iter + 1;
+
+            costs = compute_link_costs(network, &volumes, vdf);
+
+            // Update path costs
+            for paths in path_sets.values_mut() {
+                for path in paths.iter_mut() {
+                    path.cost = Self::path_cost(&path.links, &costs);
+                }
+            }
+
+            // For each OD pair: find shortest path, add to set if new, shift flow
+            let mut total_cost = 0.0;
+            let mut total_shortest_cost = 0.0;
+
+            for &origin_zone in &zone_ids {
+                let origin_node = match network.get_zone_centroid(origin_zone) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+
+                let spt = dijkstra_one_to_all(network, origin_node, &costs);
+
+                for &dest_zone in &zone_ids {
+                    if origin_zone == dest_zone {
+                        continue;
+                    }
+
+                    let paths = match path_sets.get_mut(&(origin_zone, dest_zone)) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+
+                    let dest_node = match network.get_zone_centroid(dest_zone) {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+
+                    let sp_links = build_path(&spt.predecessors, network, dest_node);
+                    if sp_links.is_empty() {
+                        continue;
+                    }
+                    let sp_cost = Self::path_cost(&sp_links, &costs);
+
+                    // Add shortest path to set if not already present
+                    let already_exists = paths.iter().any(|p| p.links == sp_links);
+                    if !already_exists {
+                        paths.push(Path {
+                            links: sp_links.clone(),
+                            flow: 0.0,
+                            cost: sp_cost,
+                        });
+                    }
+
+                    let total_demand: f64 = paths.iter().map(|p| p.flow).sum();
+                    let weighted_cost: f64 = paths.iter().map(|p| p.flow * p.cost).sum();
+                    total_cost += weighted_cost;
+                    total_shortest_cost += total_demand * sp_cost;
+
+                    // Gradient projection: shift flow from expensive paths to shortest
+                    let step = self.step_scale / (iteration as f64).sqrt();
+
+                    for path in paths.iter_mut() {
+                        if path.links == sp_links {
+                            continue;
+                        }
+                        let cost_diff = path.cost - sp_cost;
+                        if cost_diff > 0.0 && path.flow > 0.0 {
+                            let shift = (step * cost_diff * path.flow).min(path.flow);
+                            path.flow -= shift;
+                        }
+                    }
+
+                    // Collect flow that was removed and add to shortest path
+                    let current_total: f64 = paths.iter().map(|p| p.flow).sum();
+                    let deficit = total_demand - current_total;
+                    if deficit > 0.0 {
+                        if let Some(sp) = paths.iter_mut().find(|p| p.links == sp_links) {
+                            sp.flow += deficit;
+                        }
+                    }
+
+                    // Remove paths with negligible flow
+                    paths.retain(|p| p.flow > 1e-10 || p.links == sp_links);
+                }
+            }
+
+            volumes = Self::volumes_from_paths(&path_sets, network);
+
+            if total_cost > 0.0 {
+                relative_gap = (total_cost - total_shortest_cost) / total_cost;
+            } else {
+                relative_gap = 0.0;
+            }
+
+            log_additional!(
+                EVENT_ASSIGNMENT_ITERATION,
+                "Gradient Projection iteration",
+                iteration = iteration,
+                gap = format!("{:.8}", relative_gap)
+            );
+
+            if relative_gap.abs() < config.convergence_gap {
+                converged = true;
+                break;
+            }
+        }
+
+        // Final cost computation
+        costs = compute_link_costs(network, &volumes, vdf);
+
+        log_main!(
+            EVENT_CONVERGENCE,
+            "Gradient Projection complete",
+            iterations = iteration,
+            gap = format!("{:.8}", relative_gap),
+            converged = converged
+        );
+
+        Ok(AssignmentResult {
+            link_volumes: volumes,
+            link_costs: costs,
+            iterations: iteration,
+            relative_gap,
+            converged,
+        })
+    }
+}
