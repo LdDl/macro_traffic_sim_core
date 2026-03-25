@@ -197,3 +197,110 @@ pub fn furness_balance(
         max_iterations: config.max_iterations,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn furness_2x2_balanced() {
+        let mut matrix = vec![30.0, 70.0, 40.0, 60.0];
+        let productions = [120.0, 80.0];
+        let attractions = [90.0, 110.0];
+        let config = FurnessConfig {
+            max_iterations: 100,
+            tolerance: 1e-6,
+        };
+
+        let iters = furness_balance(&mut matrix, 2, &productions, &attractions, &config).unwrap();
+        assert!(iters <= 100);
+
+        let row0 = matrix[0] + matrix[1];
+        let row1 = matrix[2] + matrix[3];
+        assert!((row0 - 120.0).abs() < 0.01);
+        assert!((row1 - 80.0).abs() < 0.01);
+
+        let col0 = matrix[0] + matrix[2];
+        let col1 = matrix[1] + matrix[3];
+        assert!((col0 - 90.0).abs() < 0.01);
+        assert!((col1 - 110.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn furness_3x3_balanced() {
+        let mut matrix = vec![
+            10.0, 20.0, 30.0,
+            15.0, 25.0, 35.0,
+            20.0, 10.0, 40.0,
+        ];
+        let productions = [100.0, 150.0, 50.0];
+        let attractions = [80.0, 120.0, 100.0];
+        let config = FurnessConfig {
+            max_iterations: 200,
+            tolerance: 1e-6,
+        };
+
+        let iters = furness_balance(&mut matrix, 3, &productions, &attractions, &config).unwrap();
+        assert!(iters <= 200);
+
+        for i in 0..3 {
+            let row_sum: f64 = (0..3).map(|j| matrix[i * 3 + j]).sum();
+            assert!(
+                (row_sum - productions[i]).abs() < 0.01,
+                "row {i}: got {row_sum}, expected {}",
+                productions[i]
+            );
+        }
+        for j in 0..3 {
+            let col_sum: f64 = (0..3).map(|i| matrix[i * 3 + j]).sum();
+            assert!(
+                (col_sum - attractions[j]).abs() < 0.01,
+                "col {j}: got {col_sum}, expected {}",
+                attractions[j]
+            );
+        }
+    }
+
+    #[test]
+    fn furness_preserves_total() {
+        let mut matrix = vec![10.0, 20.0, 30.0, 40.0];
+        let productions = [50.0, 50.0];
+        let attractions = [40.0, 60.0];
+        let config = FurnessConfig::default();
+
+        furness_balance(&mut matrix, 2, &productions, &attractions, &config).unwrap();
+
+        let total: f64 = matrix.iter().sum();
+        assert!((total - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn furness_not_converged_returns_error() {
+        let mut matrix = vec![10.0, 20.0, 30.0, 40.0];
+        let productions = [50.0, 50.0];
+        let attractions = [40.0, 60.0];
+        let config = FurnessConfig {
+            max_iterations: 0,
+            tolerance: 1e-10,
+        };
+
+        let result = furness_balance(&mut matrix, 2, &productions, &attractions, &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn furness_already_balanced() {
+        // Matrix that already satisfies constraints
+        let mut matrix = vec![30.0, 70.0, 60.0, 40.0];
+        let productions = [100.0, 100.0];
+        let attractions = [90.0, 110.0];
+        let config = FurnessConfig {
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+
+        let iters = furness_balance(&mut matrix, 2, &productions, &attractions, &config).unwrap();
+        // Should converge very quickly
+        assert!(iters <= 10);
+    }
+}

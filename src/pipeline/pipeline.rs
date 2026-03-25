@@ -390,6 +390,8 @@ fn speed_based_time_skim(
 mod tests {
     use super::*;
 
+    const EPS: f64 = 1e-10;
+
     #[test]
     fn haversine_moscow_to_saint_petersburg() {
         // Moscow (55.7558, 37.6173) -> Saint Petersburg (59.9343, 30.3351)
@@ -401,7 +403,7 @@ mod tests {
     #[test]
     fn haversine_same_point_is_zero() {
         let dist = haversine_km(48.8566, 2.3522, 48.8566, 2.3522);
-        assert!(dist.abs() < 1e-10);
+        assert!(dist.abs() < EPS);
     }
 
     #[test]

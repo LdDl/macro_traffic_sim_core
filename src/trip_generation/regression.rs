@@ -245,3 +245,141 @@ impl TripGenerator for RegressionGenerator {
         Ok((productions, attractions))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn default_coefficients_single_zone() {
+        let trip_gen = RegressionGenerator::new();
+        let zones = vec![
+            Zone::new(1)
+                .with_population(10000.0)
+                .with_employment(5000.0)
+                .build(),
+        ];
+
+        let (prods, attrs) = trip_gen.generate(&zones).unwrap();
+
+        // P = 0.5 * 10000 + 0.1 * 5000 = 5500
+        assert!((prods[0] - 5500.0).abs() < EPS);
+        // A = 0.1 * 10000 + 0.8 * 5000 = 5000
+        assert!((attrs[0] - 5000.0).abs() < EPS);
+    }
+
+    #[test]
+    fn multiple_zones() {
+        let trip_gen = RegressionGenerator::new();
+        let zones = vec![
+            Zone::new(1)
+                .with_population(6000.0)
+                .with_employment(500.0)
+                .build(),
+            Zone::new(2)
+                .with_population(2000.0)
+                .with_employment(3000.0)
+                .build(),
+        ];
+
+        let (prods, attrs) = trip_gen.generate(&zones).unwrap();
+
+        // Zone 1: P = 0.5*6000 + 0.1*500 = 3050
+        assert!((prods[0] - 3050.0).abs() < EPS);
+        // Zone 2: P = 0.5*2000 + 0.1*3000 = 1300
+        assert!((prods[1] - 1300.0).abs() < EPS);
+        // Zone 1: A = 0.1*6000 + 0.8*500 = 1000
+        assert!((attrs[0] - 1000.0).abs() < EPS);
+        // Zone 2: A = 0.1*2000 + 0.8*3000 = 2600
+        assert!((attrs[1] - 2600.0).abs() < EPS);
+    }
+
+    #[test]
+    fn custom_coefficients() {
+        let trip_gen = RegressionGenerator::with_coefficients(
+            RegressionCoefficients {
+                intercept: 10.0,
+                pop_coeff: 0.3,
+                emp_coeff: 0.0,
+                hh_coeff: 0.0,
+                income_coeff: 0.0,
+            },
+            RegressionCoefficients {
+                intercept: 0.0,
+                pop_coeff: 0.0,
+                emp_coeff: 1.2,
+                hh_coeff: 0.0,
+                income_coeff: 0.0,
+            },
+        );
+
+        let zones = vec![
+            Zone::new(1)
+                .with_population(1000.0)
+                .with_employment(500.0)
+                .build(),
+        ];
+        let (prods, attrs) = trip_gen.generate(&zones).unwrap();
+
+        // P = 10 + 0.3 * 1000 = 310
+        assert!((prods[0] - 310.0).abs() < EPS);
+        // A = 0 + 1.2 * 500 = 600
+        assert!((attrs[0] - 600.0).abs() < EPS);
+    }
+
+    #[test]
+    fn negative_result_clamped_to_zero() {
+        let trip_gen = RegressionGenerator::with_coefficients(
+            RegressionCoefficients {
+                intercept: -1000.0,
+                pop_coeff: 0.1,
+                emp_coeff: 0.0,
+                hh_coeff: 0.0,
+                income_coeff: 0.0,
+            },
+            RegressionCoefficients::default(),
+        );
+
+        let zones = vec![
+            Zone::new(1).with_population(100.0).build(),
+        ];
+        let (prods, _) = trip_gen.generate(&zones).unwrap();
+
+        // -1000 + 0.1*100 = -990 -> clamped to 0
+        assert_eq!(prods[0], 0.0);
+    }
+
+    #[test]
+    fn empty_zones_returns_error() {
+        let trip_gen = RegressionGenerator::new();
+        let result = trip_gen.generate(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn households_and_income_coefficients() {
+        let trip_gen = RegressionGenerator::with_coefficients(
+            RegressionCoefficients {
+                intercept: 0.0,
+                pop_coeff: 0.0,
+                emp_coeff: 0.0,
+                hh_coeff: 2.0,
+                income_coeff: 0.001,
+            },
+            RegressionCoefficients::default(),
+        );
+
+        let zones = vec![
+            Zone::new(1)
+                .with_households(500.0)
+                .with_avg_income(50000.0)
+                .build(),
+        ];
+        let (prods, _) = trip_gen.generate(&zones).unwrap();
+
+        // P = 2.0*500 + 0.001*50000 = 1000 + 50 = 1050
+        assert!((prods[0] - 1050.0).abs() < EPS);
+    }
+}

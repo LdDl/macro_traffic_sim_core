@@ -171,3 +171,75 @@ impl LinkBuilder {
         self.instance
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    fn road_link(length_m: f64, speed_kmh: f64, capacity: f64, lanes: i32) -> Link {
+        Link::new(1, 10, 20)
+            .with_length_meters(length_m)
+            .with_free_speed(speed_kmh)
+            .with_capacity(capacity)
+            .with_lanes_num(lanes)
+            .build()
+    }
+
+    #[test]
+    fn free_flow_time_normal() {
+        // 1000 m at 60 km/h = 1 km / 60 km/h = 1/60 h
+        let link = road_link(1000.0, 60.0, 1800.0, 2);
+        let t = link.get_free_flow_time_hours();
+        assert!((t - 1.0 / 60.0).abs() < EPS);
+    }
+
+    #[test]
+    fn free_flow_time_zero_speed_is_infinity() {
+        let link = road_link(1000.0, 0.0, 1800.0, 2);
+        assert_eq!(link.get_free_flow_time_hours(), f64::INFINITY);
+    }
+
+    #[test]
+    fn free_flow_time_zero_length_is_infinity() {
+        let link = road_link(0.0, 60.0, 1800.0, 2);
+        assert_eq!(link.get_free_flow_time_hours(), f64::INFINITY);
+    }
+
+    #[test]
+    fn free_flow_time_negative_speed_is_infinity() {
+        let link = road_link(1000.0, -10.0, 1800.0, 2);
+        assert_eq!(link.get_free_flow_time_hours(), f64::INFINITY);
+    }
+
+    #[test]
+    fn total_capacity_two_lanes() {
+        let link = road_link(1000.0, 60.0, 1800.0, 2);
+        assert!((link.get_total_capacity() - 3600.0).abs() < EPS);
+    }
+
+    #[test]
+    fn total_capacity_one_lane() {
+        let link = road_link(1000.0, 60.0, 1800.0, 1);
+        assert!((link.get_total_capacity() - 1800.0).abs() < EPS);
+    }
+
+    #[test]
+    fn total_capacity_zero_lanes_returns_per_lane() {
+        let link = road_link(1000.0, 60.0, 1800.0, 0);
+        assert!((link.get_total_capacity() - 1800.0).abs() < EPS);
+    }
+
+    #[test]
+    fn total_capacity_zero_capacity_returns_zero() {
+        let link = road_link(1000.0, 60.0, 0.0, 2);
+        assert_eq!(link.get_total_capacity(), 0.0);
+    }
+
+    #[test]
+    fn total_capacity_negative_capacity_returns_zero() {
+        let link = road_link(1000.0, 60.0, -100.0, 2);
+        assert_eq!(link.get_total_capacity(), 0.0);
+    }
+}

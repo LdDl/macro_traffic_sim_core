@@ -190,3 +190,52 @@ impl ModeUtilityBuilder {
         self.instance
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn compute_zero_attributes_returns_asc() {
+        let u = ModeUtility::new(AgentType::Walk)
+            .with_asc(-2.0)
+            .build();
+        assert_eq!(u.compute(0.0, 0.0, 0.0), -2.0);
+    }
+
+    #[test]
+    fn compute_time_only() {
+        let u = ModeUtility::new(AgentType::Auto)
+            .with_asc(0.0)
+            .with_coeff_time(-0.03)
+            .build();
+        // V = 0 + (-0.03)*10 = -0.3
+        assert!((u.compute(10.0, 0.0, 0.0) - (-0.3)).abs() < EPS);
+    }
+
+    #[test]
+    fn compute_all_coefficients() {
+        let u = ModeUtility::new(AgentType::Auto)
+            .with_asc(0.5)
+            .with_coeff_time(-0.04)
+            .with_coeff_distance(-0.01)
+            .with_coeff_cost(-0.02)
+            .build();
+        // V = 0.5 + (-0.04)*10 + (-0.01)*5 + (-0.02)*3
+        // = 0.5 - 0.4 - 0.05 - 0.06 = -0.01
+        let v = u.compute(10.0, 5.0, 3.0);
+        assert!((v - (-0.01)).abs() < EPS);
+    }
+
+    #[test]
+    fn builder_defaults() {
+        let u = ModeUtility::new(AgentType::Bike).build();
+        assert_eq!(u.agent_type, AgentType::Bike);
+        assert_eq!(u.asc, 0.0);
+        assert_eq!(u.coeff_time, -0.03);
+        assert_eq!(u.coeff_distance, 0.0);
+        assert_eq!(u.coeff_cost, 0.0);
+    }
+}

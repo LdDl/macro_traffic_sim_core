@@ -216,3 +216,108 @@ impl ImpedanceFunction for CombinedImpedance {
         cost.powf(-self.alpha) * (-self.beta * cost).exp()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn exponential_zero_cost() {
+        let f = ExponentialImpedance::new(2.0);
+        assert_eq!(f.compute(0.0), 1.0);
+    }
+
+    #[test]
+    fn exponential_known_value() {
+        let f = ExponentialImpedance::new(2.0);
+        // exp(-2 * 1) = exp(-2)
+        let expected = (-2.0_f64).exp();
+        assert!((f.compute(1.0) - expected).abs() < EPS);
+    }
+
+    #[test]
+    fn exponential_large_cost_near_zero() {
+        let f = ExponentialImpedance::new(1.0);
+        assert!(f.compute(50.0) < 1e-20);
+    }
+
+    #[test]
+    fn exponential_monotonically_decreasing() {
+        let f = ExponentialImpedance::new(0.5);
+        let v1 = f.compute(1.0);
+        let v2 = f.compute(2.0);
+        let v3 = f.compute(5.0);
+        assert!(v1 > v2);
+        assert!(v2 > v3);
+    }
+
+    #[test]
+    fn power_unit_cost() {
+        let f = PowerImpedance::new(2.0);
+        // 1^(-2) = 1.0
+        assert_eq!(f.compute(1.0), 1.0);
+    }
+
+    #[test]
+    fn power_known_value() {
+        let f = PowerImpedance::new(2.0);
+        // 2^(-2) = 0.25
+        assert_eq!(f.compute(2.0), 0.25);
+    }
+
+    #[test]
+    fn power_zero_cost_returns_max() {
+        let f = PowerImpedance::new(1.5);
+        assert_eq!(f.compute(0.0), f64::MAX);
+    }
+
+    #[test]
+    fn power_negative_cost_returns_max() {
+        let f = PowerImpedance::new(1.5);
+        assert_eq!(f.compute(-1.0), f64::MAX);
+    }
+
+    #[test]
+    fn power_monotonically_decreasing() {
+        let f = PowerImpedance::new(1.0);
+        let v1 = f.compute(1.0);
+        let v2 = f.compute(2.0);
+        let v3 = f.compute(4.0);
+        assert!(v1 > v2);
+        assert!(v2 > v3);
+    }
+
+    #[test]
+    fn combined_known_value() {
+        let f = CombinedImpedance::new(1.0, 1.0);
+        // f(1) = 1^(-1) * exp(-1) = exp(-1)
+        let expected = (-1.0_f64).exp();
+        assert!((f.compute(1.0) - expected).abs() < EPS);
+    }
+
+    #[test]
+    fn combined_another_value() {
+        let f = CombinedImpedance::new(1.0, 1.0);
+        // f(2) = 2^(-1) * exp(-2) = 0.5 * exp(-2)
+        let expected = 0.5 * (-2.0_f64).exp();
+        assert!((f.compute(2.0) - expected).abs() < EPS);
+    }
+
+    #[test]
+    fn combined_zero_cost_returns_max() {
+        let f = CombinedImpedance::new(1.0, 1.0);
+        assert_eq!(f.compute(0.0), f64::MAX);
+    }
+
+    #[test]
+    fn combined_monotonically_decreasing() {
+        let f = CombinedImpedance::new(0.5, 0.5);
+        let v1 = f.compute(1.0);
+        let v2 = f.compute(2.0);
+        let v3 = f.compute(5.0);
+        assert!(v1 > v2);
+        assert!(v2 > v3);
+    }
+}

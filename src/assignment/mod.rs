@@ -375,3 +375,120 @@ pub fn compute_relative_gap(
 
     (numerator - denominator) / numerator
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn bpr_zero_volume_returns_free_flow() {
+        let bpr = BprFunction::default();
+        assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0), 10.0);
+    }
+
+    #[test]
+    fn bpr_at_capacity() {
+        let bpr = BprFunction::default();
+        // t = 10 * (1 + 0.15 * 1^4) = 11.5
+        let t = bpr.travel_time(10.0, 1000.0, 1000.0);
+        assert!((t - 11.5).abs() < EPS);
+    }
+
+    #[test]
+    fn bpr_half_capacity() {
+        let bpr = BprFunction::default();
+        // t = 10 * (1 + 0.15 * 0.5^4) = 10 * 1.009375 = 10.09375
+        let t = bpr.travel_time(10.0, 500.0, 1000.0);
+        assert!((t - 10.09375).abs() < EPS);
+    }
+
+    #[test]
+    fn bpr_double_capacity() {
+        let bpr = BprFunction::default();
+        // t = 10 * (1 + 0.15 * 2^4) = 10 * (1 + 0.15 * 16) = 10 * 3.4 = 34.0
+        let t = bpr.travel_time(10.0, 2000.0, 1000.0);
+        assert!((t - 34.0).abs() < EPS);
+    }
+
+    #[test]
+    fn bpr_zero_capacity_returns_infinity() {
+        let bpr = BprFunction::default();
+        assert_eq!(bpr.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn bpr_negative_capacity_returns_infinity() {
+        let bpr = BprFunction::default();
+        assert_eq!(bpr.travel_time(10.0, 100.0, -500.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn bpr_custom_params() {
+        let bpr = BprFunction::new(0.5, 2.0);
+        // t = 10 * (1 + 0.5 * (500/1000)^2) = 10 * (1 + 0.5 * 0.25) = 10 * 1.125 = 11.25
+        let t = bpr.travel_time(10.0, 500.0, 1000.0);
+        assert!((t - 11.25).abs() < EPS);
+    }
+
+    #[test]
+    fn bpr_integral_zero_volume() {
+        let bpr = BprFunction::default();
+        assert_eq!(bpr.integral(10.0, 0.0, 1000.0), 0.0);
+    }
+
+    #[test]
+    fn bpr_integral_at_capacity() {
+        let bpr = BprFunction::default();
+        // integral = t0 * (x + alpha * c * (x/c)^(beta+1) / (beta+1))
+        // = 10 * (1000 + 0.15 * 1000 * 1^5 / 5) = 10 * (1000 + 30) = 10300
+        let integral = bpr.integral(10.0, 1000.0, 1000.0);
+        assert!((integral - 10300.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bpr_integral_zero_capacity_returns_infinity() {
+        let bpr = BprFunction::default();
+        assert_eq!(bpr.integral(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn bpr_integral_monotonic() {
+        let bpr = BprFunction::default();
+        let i1 = bpr.integral(10.0, 500.0, 1000.0);
+        let i2 = bpr.integral(10.0, 1000.0, 1000.0);
+        let i3 = bpr.integral(10.0, 1500.0, 1000.0);
+        assert!(i1 < i2);
+        assert!(i2 < i3);
+    }
+
+    #[test]
+    fn relative_gap_equal_volumes_is_zero() {
+        let volumes = HashMap::from([(1, 100.0), (2, 200.0)]);
+        let costs = HashMap::from([(1, 5.0), (2, 10.0)]);
+        let gap = compute_relative_gap(&volumes, &costs, &volumes);
+        assert_eq!(gap, 0.0);
+    }
+
+    #[test]
+    fn relative_gap_known_value() {
+        let volumes = HashMap::from([(1, 100.0), (2, 50.0)]);
+        let costs = HashMap::from([(1, 2.0), (2, 4.0)]);
+        let aux = HashMap::from([(1, 120.0), (2, 30.0)]);
+        // numerator = 100*2 + 50*4 = 400
+        // denominator = 120*2 + 30*4 = 360
+        // gap = (400 - 360) / 400 = 0.1
+        let gap = compute_relative_gap(&volumes, &costs, &aux);
+        assert!((gap - 0.1).abs() < EPS);
+    }
+
+    #[test]
+    fn relative_gap_zero_volumes_returns_zero() {
+        let volumes: HashMap<LinkID, f64> = HashMap::new();
+        let costs = HashMap::from([(1, 5.0)]);
+        let aux = HashMap::from([(1, 100.0)]);
+        let gap = compute_relative_gap(&volumes, &costs, &aux);
+        assert_eq!(gap, 0.0);
+    }
+}

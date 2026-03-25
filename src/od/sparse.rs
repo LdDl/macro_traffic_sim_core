@@ -197,3 +197,99 @@ impl OdMatrix for SparseOdMatrix {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn new_matrix_is_empty() {
+        let od = SparseOdMatrix::new(vec![1, 2, 3]);
+        assert_eq!(od.nnz(), 0);
+        assert_eq!(od.total(), 0.0);
+        assert_eq!(od.get(1, 2), 0.0);
+    }
+
+    #[test]
+    fn set_and_get() {
+        let mut od = SparseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 500.0);
+        assert_eq!(od.get(1, 2), 500.0);
+        assert_eq!(od.nnz(), 1);
+    }
+
+    #[test]
+    fn set_zero_removes_entry() {
+        let mut od = SparseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 100.0);
+        assert_eq!(od.nnz(), 1);
+        od.set(1, 2, 0.0);
+        assert_eq!(od.nnz(), 0);
+        assert_eq!(od.get(1, 2), 0.0);
+    }
+
+    #[test]
+    fn add_accumulates() {
+        let mut od = SparseOdMatrix::new(vec![1, 2]);
+        od.add(1, 2, 60.0);
+        od.add(1, 2, 40.0);
+        assert_eq!(od.get(1, 2), 100.0);
+        assert_eq!(od.nnz(), 1);
+    }
+
+    #[test]
+    fn add_to_zero_removes_entry() {
+        let mut od = SparseOdMatrix::new(vec![1, 2]);
+        od.add(1, 2, 50.0);
+        od.add(1, 2, -50.0);
+        assert_eq!(od.nnz(), 0);
+    }
+
+    #[test]
+    fn row_sum() {
+        let mut od = SparseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 2, 30.0);
+        od.set(1, 3, 70.0);
+        od.set(2, 3, 50.0);
+        assert!((od.row_sum(1) - 100.0).abs() < EPS);
+        assert!((od.row_sum(2) - 50.0).abs() < EPS);
+        assert!((od.row_sum(3) - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn col_sum() {
+        let mut od = SparseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 3, 30.0);
+        od.set(2, 3, 70.0);
+        assert!((od.col_sum(3) - 100.0).abs() < EPS);
+        assert!((od.col_sum(1) - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn total() {
+        let mut od = SparseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 100.0);
+        od.set(2, 1, 200.0);
+        assert_eq!(od.total(), 300.0);
+    }
+
+    #[test]
+    fn zone_ids_and_count() {
+        let od = SparseOdMatrix::new(vec![10, 20, 30]);
+        assert_eq!(od.zone_ids(), &[10, 20, 30]);
+        assert_eq!(od.zone_count(), 3);
+    }
+
+    #[test]
+    fn iter_returns_only_nonzero() {
+        let mut od = SparseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 2, 50.0);
+        od.set(3, 1, 25.0);
+        let entries = od.iter();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains(&(1, 2, 50.0)));
+        assert!(entries.contains(&(3, 1, 25.0)));
+    }
+}

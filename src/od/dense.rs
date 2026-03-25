@@ -279,3 +279,108 @@ impl OdMatrix for DenseOdMatrix {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    #[test]
+    fn new_matrix_is_zero() {
+        let od = DenseOdMatrix::new(vec![1, 2, 3]);
+        assert_eq!(od.total(), 0.0);
+        assert_eq!(od.get(1, 2), 0.0);
+    }
+
+    #[test]
+    fn set_and_get() {
+        let mut od = DenseOdMatrix::new(vec![10, 20]);
+        od.set(10, 20, 500.0);
+        assert_eq!(od.get(10, 20), 500.0);
+        assert_eq!(od.get(20, 10), 0.0);
+    }
+
+    #[test]
+    fn add_accumulates() {
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.add(1, 2, 30.0);
+        od.add(1, 2, 70.0);
+        assert_eq!(od.get(1, 2), 100.0);
+    }
+
+    #[test]
+    fn unknown_zone_returns_zero() {
+        let od = DenseOdMatrix::new(vec![1, 2]);
+        assert_eq!(od.get(1, 999), 0.0);
+        assert_eq!(od.get(999, 1), 0.0);
+    }
+
+    #[test]
+    fn set_unknown_zone_is_noop() {
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(999, 1, 100.0);
+        assert_eq!(od.total(), 0.0);
+    }
+
+    #[test]
+    fn from_data() {
+        let od = DenseOdMatrix::from_data(vec![1, 2], vec![0.0, 100.0, 200.0, 0.0]);
+        assert_eq!(od.get(1, 2), 100.0);
+        assert_eq!(od.get(2, 1), 200.0);
+        assert_eq!(od.total(), 300.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn from_data_wrong_length_panics() {
+        let _ = DenseOdMatrix::from_data(vec![1, 2], vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn row_sum() {
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 2, 50.0);
+        od.set(1, 3, 30.0);
+        od.set(2, 3, 100.0);
+        assert!((od.row_sum(1) - 80.0).abs() < EPS);
+        assert!((od.row_sum(2) - 100.0).abs() < EPS);
+        assert!((od.row_sum(3) - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn col_sum() {
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 3, 30.0);
+        od.set(2, 3, 70.0);
+        assert!((od.col_sum(3) - 100.0).abs() < EPS);
+        assert!((od.col_sum(1) - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn zone_ids_and_count() {
+        let od = DenseOdMatrix::new(vec![10, 20, 30]);
+        assert_eq!(od.zone_ids(), &[10, 20, 30]);
+        assert_eq!(od.zone_count(), 3);
+    }
+
+    #[test]
+    fn data_and_data_mut() {
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 42.0);
+        assert_eq!(od.data(), &[0.0, 42.0, 0.0, 0.0]);
+
+        od.data_mut()[0] = 10.0;
+        assert_eq!(od.get(1, 1), 10.0);
+    }
+
+    #[test]
+    fn iter_returns_all_cells() {
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 50.0);
+        let entries = od.iter();
+        assert_eq!(entries.len(), 4);
+        assert!(entries.contains(&(1, 2, 50.0)));
+        assert!(entries.contains(&(1, 1, 0.0)));
+    }
+}
