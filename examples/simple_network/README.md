@@ -62,14 +62,14 @@ graph TD
     N3["<b>Node 3</b><br/>P=1300, A=2600"]
     N4["<b>Node 4</b><br/>P=1200, A=1800"]
 
-    N1 -- "1150 veh<br/>V/C=0.64" --> N2
-    N2 -. "657 veh<br/>V/C=0.37" .-> N1
-    N1 == "1379 veh<br/>V/C=0.77" ==> N3
-    N3 -. "382 veh<br/>V/C=0.21" .-> N1
-    N2 -- "1229 veh<br/>V/C=0.68" --> N4
-    N4 -. "836 veh<br/>V/C=0.46" .-> N2
-    N3 -- "1031 veh<br/>V/C=0.57" --> N4
-    N4 -. "984 veh<br/>V/C=0.55" .-> N3
+    N1 -- "1150 veh<br/>V/C=0.32" --> N2
+    N2 -. "657 veh<br/>V/C=0.18" .-> N1
+    N1 == "1379 veh<br/>V/C=0.38" ==> N3
+    N3 -. "382 veh<br/>V/C=0.11" .-> N1
+    N2 -- "1229 veh<br/>V/C=0.34" --> N4
+    N4 -. "836 veh<br/>V/C=0.23" .-> N2
+    N3 -- "1031 veh<br/>V/C=0.29" --> N4
+    N4 -. "984 veh<br/>V/C=0.27" .-> N3
 ```
 
 The thick arrow (1->3, 1379 veh) is the most loaded link - the main
@@ -163,22 +163,29 @@ and walking at 5 km/h produces long travel times even on short distances.
 Frank-Wolfe converges in **4 iterations** with relative gap $4.5 \times 10^{-5}$
 (below the $10^{-4}$ threshold).
 
-Top loaded links (5692 auto trips assigned to 8 road links):
+Top loaded links (5692 auto trips assigned to 8 road links).
+Total capacity per link = 1800 veh/h/lane * 2 lanes = 3600 veh/h:
 
 | Link | Direction | Volume (veh) | Cost (hours) | V/C ratio |
 |------|-----------|--------------|--------------|-----------|
-| 102  | 1 -> 3    | 1378.6       | 0.0140       | 0.77      |
-| 104  | 2 -> 4    | 1229.1       | 0.0140       | 0.68      |
-| 100  | 1 -> 2    | 1150.2       | 0.0140       | 0.64      |
-| 106  | 3 -> 4    | 1031.4       | 0.0140       | 0.57      |
-| 107  | 4 -> 3    | 983.7        | 0.0140       | 0.55      |
-| 105  | 4 -> 2    | 836.3        | 0.0140       | 0.46      |
-| 101  | 2 -> 1    | 656.9        | 0.0140       | 0.37      |
-| 103  | 3 -> 1    | 381.7        | 0.0140       | 0.21      |
+| 102  | 1 -> 3    | 1378.6       | 0.0140       | 0.38      |
+| 104  | 2 -> 4    | 1229.1       | 0.0140       | 0.34      |
+| 100  | 1 -> 2    | 1150.2       | 0.0140       | 0.32      |
+| 106  | 3 -> 4    | 1031.4       | 0.0140       | 0.29      |
+| 107  | 4 -> 3    | 983.7        | 0.0140       | 0.27      |
+| 105  | 4 -> 2    | 836.3        | 0.0140       | 0.23      |
+| 101  | 2 -> 1    | 656.9        | 0.0140       | 0.18      |
+| 103  | 3 -> 1    | 381.7        | 0.0140       | 0.11      |
 
-All V/C ratios are below 1.0, so no congestion appears.
-The BPR function adds negligible delay: free-flow time for a ~800 m
-link at 60 km/h is 0.0133 h, observed cost is 0.0140 h (about 5% above free-flow).
+V/C ratios are very low (0.11-0.38) - the network has excess capacity
+for this demand level. The BPR function adds virtually no delay:
+free-flow time for ~840 m at 60 km/h is 0.014 h, and observed cost
+is the same 0.014 h (congestion adds less than 0.3%).
+
+This is expected: 5692 auto trips spread across 8 links with 3600 veh/h
+each produces no meaningful congestion. To see BPR effects, you would
+need to either reduce capacity (fewer lanes) or increase demand
+(more population/employment).
 
 Links 102 (1->3) and 104 (2->4) are the most loaded because they serve
 the dominant flow from residential zone 1 toward employment zones 3 and 4.

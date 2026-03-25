@@ -23,7 +23,7 @@
 //! use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 //! use macro_traffic_sim_core::mode_choice::MultinomialLogit;
 //!
-//! // Load meso network from CSV, configure, and run
+//! // Acquire meso network (load from CSV/JSON/REST API, whatever), configure, and run
 //! ```
 pub mod assignment;
 pub mod config;
