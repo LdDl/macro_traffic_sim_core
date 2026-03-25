@@ -2,11 +2,31 @@
 name = "macro_traffic_sim_core"
 version = "0.1.0"
 edition = "2024"
+description = "Core library for macroscopic traffic simulation using the classical 4-step demand model."
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/LdDl/macro_traffic_sim_core"
+documentation = "https://docs.rs/macro_traffic_sim_core"
+homepage = "https://github.com/LdDl/macro_traffic_sim_core"
+keywords = ["traffic", "simulation", "transportation", "assignment", "demand"]
+categories = ["simulation", "science"]
 
 [dependencies]
 ordered-float = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "registry"] }
+
+[lib]
+name = "macro_traffic_sim_core"
+path = "src/lib.rs"
+
+[[example]]
+name = "simple_network"
+path = "examples/simple_network/main.rs"
+
+[[example]]
+name = "four_step"
+path = "examples/four_step/main.rs"
 
 [dev-dependencies]
 csv = "1"

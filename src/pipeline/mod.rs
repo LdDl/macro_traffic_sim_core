@@ -13,7 +13,8 @@
 //!    (AUTO, BIKE, WALK) via a multinomial logit model.
 //! 4. **Traffic Assignment** -- assigns the AUTO OD matrix to the meso
 //!    network using the configured method (Frank-Wolfe, MSA, or Gradient
-//!    Projection) to find User Equilibrium link volumes.
+//!    Projection) to find User Equilibrium link volumes. Only AUTO is
+//!    assigned because BIKE and WALK do not contribute to road congestion.
 //!
 //! ## Feedback loop
 //!

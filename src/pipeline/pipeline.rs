@@ -6,6 +6,7 @@
 //! of steps, feedback loop, and skim computation.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use super::error::PipelineError;
 use crate::assignment::{
@@ -28,6 +29,25 @@ use crate::zone::Zone;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
 
+/// Timing information for each pipeline step.
+///
+/// All durations are cumulative across feedback iterations.
+/// For example, if 3 feedback loops ran, `distribution` is the
+/// total time spent in all 3 distribution passes.
+#[derive(Debug, Clone)]
+pub struct PipelineTimings {
+    /// Trip generation (step 1, runs once).
+    pub generation: Duration,
+    /// Trip distribution (step 2, cumulative across feedback loops).
+    pub distribution: Duration,
+    /// Mode choice (step 3, cumulative across feedback loops).
+    pub mode_choice: Duration,
+    /// Traffic assignment (step 4, cumulative across feedback loops).
+    pub assignment: Duration,
+    /// Total pipeline wall time.
+    pub total: Duration,
+}
+
 /// Result of the complete 4-step model pipeline.
 ///
 /// Contains all intermediate and final results so callers can
@@ -48,6 +68,8 @@ pub struct PipelineResult {
     pub assignment: AssignmentResult,
     /// Number of feedback iterations actually performed.
     pub feedback_iterations_done: usize,
+    /// Per-step timing breakdown.
+    pub timings: PipelineTimings,
 }
 
 /// Run the complete 4-step traffic demand model.
@@ -85,6 +107,8 @@ pub fn run_four_step_model(
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
 
+    let pipeline_start = Instant::now();
+
     log_main!(
         EVENT_PIPELINE,
         "Starting 4-step model pipeline",
@@ -95,14 +119,22 @@ pub fn run_four_step_model(
 
     let zone_ids: Vec<ZoneID> = zones.iter().map(|z| z.id).collect();
 
+    let t_generation;
+    let mut t_distribution = Duration::ZERO;
+    let mut t_mode_choice = Duration::ZERO;
+    let mut t_assignment = Duration::ZERO;
+
     // Step 1: Trip Generation
+    let step_start = Instant::now();
     let (productions, attractions) = trip_generator.generate(zones)?;
+    t_generation = step_start.elapsed();
 
     log_main!(
         EVENT_PIPELINE,
         "Trip generation complete",
         total_productions = format!("{:.0}", productions.iter().sum::<f64>()),
-        total_attractions = format!("{:.0}", attractions.iter().sum::<f64>())
+        total_attractions = format!("{:.0}", attractions.iter().sum::<f64>()),
+        elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
     );
 
     // Initial skim from free-flow costs
@@ -129,15 +161,19 @@ pub fn run_four_step_model(
         );
 
         // Step 2: Trip Distribution
+        let step_start = Instant::now();
         total_od = gravity.distribute(&productions, &attractions, &skim, impedance, &zone_ids)?;
+        t_distribution += step_start.elapsed();
 
         log_main!(
             EVENT_PIPELINE,
             "Trip distribution complete",
-            total_trips = format!("{:.0}", total_od.total())
+            total_trips = format!("{:.0}", total_od.total()),
+            elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
         );
 
         // Step 3: Mode Choice
+        let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::new();
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
         let auto_distance = distance_skim(network, &zone_ids);
@@ -171,20 +207,30 @@ pub fn run_four_step_model(
         );
 
         mode_od = logit_model.split(&total_od, &mode_skims)?;
+        t_mode_choice += step_start.elapsed();
+
+        log_main!(
+            EVENT_PIPELINE,
+            "Mode choice complete",
+            elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
+        );
 
         // Step 4: Traffic Assignment (AUTO only)
         let auto_od = mode_od.get(&AgentType::Auto).ok_or_else(|| {
             PipelineError::MissingResult("no AUTO OD matrix from mode choice".to_string())
         })?;
 
+        let step_start = Instant::now();
         assignment_result = run_assignment(network, auto_od, &config)?;
+        t_assignment += step_start.elapsed();
 
         log_main!(
             EVENT_PIPELINE,
             "Assignment complete",
             iterations = assignment_result.iterations,
             gap = format!("{:.8}", assignment_result.relative_gap),
-            converged = assignment_result.converged
+            converged = assignment_result.converged,
+            elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
         );
 
         // Update skim from assignment costs for next feedback iteration
@@ -194,6 +240,13 @@ pub fn run_four_step_model(
 
         // If this is the last iteration, return results
         if fb_iter + 1 == max_feedback {
+            log_main!(
+                EVENT_PIPELINE,
+                "Pipeline complete",
+                feedback_iterations = feedback_done,
+                elapsed_ms = format!("{:.3}", pipeline_start.elapsed().as_secs_f64() * 1000.0)
+            );
+
             return Ok(PipelineResult {
                 productions,
                 attractions,
@@ -201,6 +254,13 @@ pub fn run_four_step_model(
                 mode_od,
                 assignment: assignment_result,
                 feedback_iterations_done: feedback_done,
+                timings: PipelineTimings {
+                    generation: t_generation,
+                    distribution: t_distribution,
+                    mode_choice: t_mode_choice,
+                    assignment: t_assignment,
+                    total: pipeline_start.elapsed(),
+                },
             });
         }
     }
@@ -285,7 +345,17 @@ fn distance_skim(network: &Network, zone_ids: &[ZoneID]) -> DenseOdMatrix {
 /// Haversine great-circle distance between two points in kilometers.
 ///
 /// Coordinates are in degrees (WGS-84).
-fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::pipeline::haversine_km;
+///
+/// // Moscow to Saint Petersburg: ~634 km
+/// let dist = haversine_km(55.7558, 37.6173, 59.9343, 30.3351);
+/// assert!((dist - 634.0).abs() < 5.0);
+/// ```
+pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = (lat2 - lat1).to_radians();
     let dlon = (lon2 - lon1).to_radians();
     let a = (dlat / 2.0).sin().powi(2)
