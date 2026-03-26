@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use super::error::AssignmentError;
+use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::LinkID;
 use crate::od::OdMatrix;
@@ -233,6 +234,8 @@ pub trait AssignmentMethod {
     ///
     /// # Arguments
     /// * `network` - The macroscopic network.
+    /// * `graph` - Pre-built indexed graph (CSR). Built once and reused
+    ///   across feedback iterations to avoid redundant construction.
     /// * `od_matrix` - Origin-destination demand matrix.
     /// * `vdf` - Volume-delay function.
     /// * `config` - Algorithm configuration.
@@ -242,6 +245,7 @@ pub trait AssignmentMethod {
     fn assign(
         &self,
         network: &Network,
+        graph: &IndexedGraph,
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
@@ -272,13 +276,12 @@ pub fn compute_link_costs_into(
     vdf: &dyn VolumeDelayFunction,
     out: &mut HashMap<LinkID, f64>,
 ) {
-    out.clear();
     for (&link_id, link) in &network.links {
         let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
         let ff_time = link.get_free_flow_time_hours();
         let capacity = link.get_total_capacity();
         let cost = vdf.travel_time(ff_time, volume, capacity);
-        out.insert(link_id, cost);
+        *out.entry(link_id).or_insert(0.0) = cost;
     }
 }
 

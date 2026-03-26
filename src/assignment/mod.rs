@@ -71,8 +71,10 @@ mod assignment;
 pub mod error;
 pub mod frank_wolfe;
 pub mod gradient_projection;
+pub mod indexed_graph;
 pub mod msa;
 pub mod shortest_path;
 
 pub use self::assignment::*;
+pub use self::indexed_graph::IndexedGraph;
 pub use self::{frank_wolfe::*, gradient_projection::*, msa::*, shortest_path::*};

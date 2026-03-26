@@ -142,36 +142,52 @@ pub fn furness_balance(
     assert_eq!(target_productions.len(), n);
     assert_eq!(target_attractions.len(), n);
 
+    let mut col_sums = vec![0.0; n];
+    let mut col_factors = vec![1.0; n];
+
     for iteration in 0..config.max_iterations {
-        // Row scaling
+        // Row scaling (row-major access - cache-friendly)
         for i in 0..n {
-            let row_sum: f64 = (0..n).map(|j| matrix[i * n + j]).sum();
+            let row = &mut matrix[i * n..(i + 1) * n];
+            let row_sum: f64 = row.iter().sum();
             if row_sum > 0.0 && target_productions[i] > 0.0 {
                 let factor = target_productions[i] / row_sum;
-                for j in 0..n {
-                    matrix[i * n + j] *= factor;
+                for v in row.iter_mut() {
+                    *v *= factor;
                 }
             }
         }
 
-        // Column scaling
+        // Column scaling (cache-friendly: accumulate col sums in row-major pass,
+        // then apply factors in a second row-major pass)
+        col_sums.fill(0.0);
+        for i in 0..n {
+            let row = &matrix[i * n..(i + 1) * n];
+            for j in 0..n {
+                col_sums[j] += row[j];
+            }
+        }
         for j in 0..n {
-            let col_sum: f64 = (0..n).map(|i| matrix[i * n + j]).sum();
-            if col_sum > 0.0 && target_attractions[j] > 0.0 {
-                let factor = target_attractions[j] / col_sum;
-                for i in 0..n {
-                    matrix[i * n + j] *= factor;
-                }
+            if col_sums[j] > 0.0 && target_attractions[j] > 0.0 {
+                col_factors[j] = target_attractions[j] / col_sums[j];
+            } else {
+                col_factors[j] = 1.0;
+            }
+        }
+        for i in 0..n {
+            let row = &mut matrix[i * n..(i + 1) * n];
+            for j in 0..n {
+                row[j] *= col_factors[j];
             }
         }
 
         // After column scaling, column sums match targets exactly.
         // Only need to check row sums for convergence (1 scan instead of 2).
         let mut max_error = 0.0_f64;
-
         for i in 0..n {
             if target_productions[i] > 0.0 {
-                let row_sum: f64 = (0..n).map(|j| matrix[i * n + j]).sum();
+                let row = &matrix[i * n..(i + 1) * n];
+                let row_sum: f64 = row.iter().sum();
                 let err = ((row_sum - target_productions[i]) / target_productions[i]).abs();
                 max_error = max_error.max(err);
             }

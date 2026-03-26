@@ -28,21 +28,15 @@
 //! - Convergence is guaranteed but slower than Frank-Wolfe.
 //! - Good for quick prototyping or when line search cost is a concern.
 
-use std::collections::HashMap;
-
 use super::error::AssignmentError;
+use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::LinkID;
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
-    compute_link_costs, compute_link_costs_into, compute_relative_gap,
-    shortest_path::{all_or_nothing, all_or_nothing_into},
-};
+use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
 
 /// Method of Successive Averages traffic assignment.
 ///
@@ -75,24 +69,25 @@ impl Default for Msa {
 impl AssignmentMethod for Msa {
     fn assign(
         &self,
-        network: &Network,
+        _network: &Network,
+        graph: &IndexedGraph,
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
     ) -> Result<AssignmentResult, AssignmentError> {
         log_main!(EVENT_ASSIGNMENT, "Starting MSA assignment",);
 
+        let n = graph.num_links;
+
+        let mut costs = vec![0.0; n];
+        let mut volumes = vec![0.0; n];
+        let mut aux_volumes = vec![0.0; n];
+
         // Step 0: Initialize with free-flow costs
-        let mut costs = compute_link_costs(network, &HashMap::new(), vdf);
+        graph.compute_costs(&volumes, vdf, &mut costs);
 
         // Initial all-or-nothing assignment
-        let mut volumes = all_or_nothing(network, od_matrix, &costs)?;
-
-        // Pre-allocate auxiliary volumes (reused every iteration)
-        let mut aux_volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
-        for &link_id in network.links.keys() {
-            aux_volumes.insert(link_id, 0.0);
-        }
+        graph.all_or_nothing(od_matrix, &costs, &mut volumes);
 
         let mut converged = false;
         let mut relative_gap = f64::MAX;
@@ -101,13 +96,13 @@ impl AssignmentMethod for Msa {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            // Update link costs (reuse allocation)
-            compute_link_costs_into(network, &volumes, vdf, &mut costs);
+            // Update link costs
+            graph.compute_costs(&volumes, vdf, &mut costs);
 
-            // All-or-nothing with current costs (reuse allocation)
-            all_or_nothing_into(network, od_matrix, &costs, &mut aux_volumes)?;
+            // All-or-nothing with current costs
+            graph.all_or_nothing(od_matrix, &costs, &mut aux_volumes);
 
-            relative_gap = compute_relative_gap(&volumes, &costs, &aux_volumes);
+            relative_gap = graph.relative_gap(&volumes, &costs, &aux_volumes);
 
             log_additional!(
                 EVENT_ASSIGNMENT_ITERATION,
@@ -122,18 +117,16 @@ impl AssignmentMethod for Msa {
             }
 
             // MSA step: lambda = 1 / (iteration + 1)
-            // +1 because iteration starts at 1, and first AoN was iteration 0
             let lambda = 1.0 / (iteration as f64 + 1.0);
 
             // Update volumes: x = x + lambda * (y - x)
-            for (&link_id, vol) in volumes.iter_mut() {
-                let aux_vol = aux_volumes.get(&link_id).copied().unwrap_or(0.0);
-                *vol += lambda * (aux_vol - *vol);
+            for i in 0..n {
+                volumes[i] += lambda * (aux_volumes[i] - volumes[i]);
             }
         }
 
-        // Final cost computation (reuse allocation)
-        compute_link_costs_into(network, &volumes, vdf, &mut costs);
+        // Final cost computation
+        graph.compute_costs(&volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,
@@ -144,8 +137,8 @@ impl AssignmentMethod for Msa {
         );
 
         Ok(AssignmentResult {
-            link_volumes: volumes,
-            link_costs: costs,
+            link_volumes: graph.volumes_to_hashmap(&volumes),
+            link_costs: graph.costs_to_hashmap(&costs),
             iterations: iteration,
             relative_gap,
             converged,

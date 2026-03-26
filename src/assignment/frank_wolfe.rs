@@ -36,30 +36,16 @@
 //! - Cannot extract path-level information (use [`GradientProjection`]
 //!   if paths are needed).
 
-use std::collections::HashMap;
-
 use super::error::AssignmentError;
+use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::LinkID;
 
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
-    compute_link_costs, compute_link_costs_into, compute_relative_gap,
-    shortest_path::{all_or_nothing, all_or_nothing_into},
-};
-
-/// Pre-extracted immutable link properties for hot-loop iteration.
-/// Avoids repeated HashMap lookups and method calls on Link.
-struct LinkProps {
-    id: LinkID,
-    ff_time: f64,
-    capacity: f64,
-}
+use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
 
 /// Frank-Wolfe traffic assignment algorithm.
 ///
@@ -87,14 +73,11 @@ impl FrankWolfe {
         FrankWolfe
     }
 
-    /// Bisection line search to find the optimal step size.
-    ///
-    /// Uses pre-extracted link properties to avoid repeated HashMap
-    /// lookups and method calls (~40 eval calls per line search).
+    /// Bisection line search on Vec-indexed data.
     fn line_search(
-        link_props: &[LinkProps],
-        current: &HashMap<LinkID, f64>,
-        auxiliary: &HashMap<LinkID, f64>,
+        graph: &IndexedGraph,
+        current: &[f64],
+        auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
     ) -> f64 {
         let mut lo = 0.0_f64;
@@ -104,8 +87,8 @@ impl FrankWolfe {
             let mid = (lo + hi) / 2.0;
 
             let eps = 1e-6;
-            let obj_mid = Self::eval_at_step(link_props, current, auxiliary, vdf, mid);
-            let obj_mid_plus = Self::eval_at_step(link_props, current, auxiliary, vdf, mid + eps);
+            let obj_mid = Self::eval_at_step(graph, current, auxiliary, vdf, mid);
+            let obj_mid_plus = Self::eval_at_step(graph, current, auxiliary, vdf, mid + eps);
 
             if obj_mid_plus > obj_mid {
                 hi = mid;
@@ -122,22 +105,17 @@ impl FrankWolfe {
     }
 
     /// Evaluate the Beckmann objective at a given step size.
-    ///
-    /// Uses pre-extracted link properties instead of iterating
-    /// the network HashMap and calling methods on each Link.
     fn eval_at_step(
-        link_props: &[LinkProps],
-        current: &HashMap<LinkID, f64>,
-        auxiliary: &HashMap<LinkID, f64>,
+        graph: &IndexedGraph,
+        current: &[f64],
+        auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
         lambda: f64,
     ) -> f64 {
         let mut objective = 0.0;
-        for lp in link_props {
-            let cur = current.get(&lp.id).copied().unwrap_or(0.0);
-            let aux = auxiliary.get(&lp.id).copied().unwrap_or(0.0);
-            let vol = cur + lambda * (aux - cur);
-            objective += vdf.integral(lp.ff_time, vol, lp.capacity);
+        for i in 0..graph.num_links {
+            let vol = current[i] + lambda * (auxiliary[i] - current[i]);
+            objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i]);
         }
         objective
     }
@@ -152,35 +130,26 @@ impl Default for FrankWolfe {
 impl AssignmentMethod for FrankWolfe {
     fn assign(
         &self,
-        network: &Network,
+        _network: &Network,
+        graph: &IndexedGraph,
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
     ) -> Result<AssignmentResult, AssignmentError> {
         log_main!(EVENT_ASSIGNMENT, "Starting Frank-Wolfe assignment",);
 
-        // Pre-extract link properties once (immutable during assignment)
-        let link_props: Vec<LinkProps> = network
-            .links
-            .iter()
-            .map(|(&id, link)| LinkProps {
-                id,
-                ff_time: link.get_free_flow_time_hours(),
-                capacity: link.get_total_capacity(),
-            })
-            .collect();
+        let n = graph.num_links;
+
+        // Vec-based volumes, costs, aux_volumes
+        let mut costs = vec![0.0; n];
+        let mut volumes = vec![0.0; n];
+        let mut aux_volumes = vec![0.0; n];
 
         // Step 0: Initialize with free-flow costs
-        let mut costs = compute_link_costs(network, &HashMap::new(), vdf);
+        graph.compute_costs(&volumes, vdf, &mut costs);
 
         // Initial all-or-nothing assignment
-        let mut volumes = all_or_nothing(network, od_matrix, &costs)?;
-
-        // Pre-allocate auxiliary volumes (reused every iteration)
-        let mut aux_volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
-        for &link_id in network.links.keys() {
-            aux_volumes.insert(link_id, 0.0);
-        }
+        graph.all_or_nothing(od_matrix, &costs, &mut volumes);
 
         let mut converged = false;
         let mut relative_gap = f64::MAX;
@@ -189,13 +158,13 @@ impl AssignmentMethod for FrankWolfe {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            // Update link costs with current volumes (reuse allocation)
-            compute_link_costs_into(network, &volumes, vdf, &mut costs);
+            // Update link costs with current volumes
+            graph.compute_costs(&volumes, vdf, &mut costs);
 
-            // All-or-nothing with current costs (reuse allocation)
-            all_or_nothing_into(network, od_matrix, &costs, &mut aux_volumes)?;
+            // All-or-nothing with current costs
+            graph.all_or_nothing(od_matrix, &costs, &mut aux_volumes);
 
-            relative_gap = compute_relative_gap(&volumes, &costs, &aux_volumes);
+            relative_gap = graph.relative_gap(&volumes, &costs, &aux_volumes);
 
             log_additional!(
                 EVENT_ASSIGNMENT_ITERATION,
@@ -210,17 +179,16 @@ impl AssignmentMethod for FrankWolfe {
             }
 
             // Line search for optimal step size
-            let lambda = Self::line_search(&link_props, &volumes, &aux_volumes, vdf);
+            let lambda = Self::line_search(&graph, &volumes, &aux_volumes, vdf);
 
             // Update volumes: x = x + lambda * (y - x)
-            for (&link_id, vol) in volumes.iter_mut() {
-                let aux_vol = aux_volumes.get(&link_id).copied().unwrap_or(0.0);
-                *vol += lambda * (aux_vol - *vol);
+            for i in 0..n {
+                volumes[i] += lambda * (aux_volumes[i] - volumes[i]);
             }
         }
 
-        // Final cost computation (reuse allocation)
-        compute_link_costs_into(network, &volumes, vdf, &mut costs);
+        // Final cost computation
+        graph.compute_costs(&volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,
@@ -231,8 +199,8 @@ impl AssignmentMethod for FrankWolfe {
         );
 
         Ok(AssignmentResult {
-            link_volumes: volumes,
-            link_costs: costs,
+            link_volumes: graph.volumes_to_hashmap(&volumes),
+            link_costs: graph.costs_to_hashmap(&costs),
             iterations: iteration,
             relative_gap,
             converged,

@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use super::error::PipelineError;
 use crate::assignment::{
-    AssignmentMethod, AssignmentResult, compute_link_costs, frank_wolfe::FrankWolfe,
-    gradient_projection::GradientProjection, msa::Msa, shortest_path::compute_skim_matrix,
+    AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
+    gradient_projection::GradientProjection, msa::Msa,
 };
 use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
@@ -137,9 +137,11 @@ pub fn run_four_step_model(
         elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
     );
 
-    // Initial skim from free-flow costs
-    let initial_costs = compute_link_costs(network, &HashMap::new(), &config.bpr);
-    let mut skim = compute_skim_matrix(network, &initial_costs, &zone_ids);
+    // Build indexed graph once for skim computation
+    let igraph = IndexedGraph::from_network(network);
+    let mut skim_costs = vec![0.0; igraph.num_links];
+    igraph.compute_costs(&vec![0.0; igraph.num_links], &config.bpr, &mut skim_costs);
+    let mut skim = igraph.compute_skim(&skim_costs, &zone_ids);
 
     let gravity = GravityModel::with_furness_config(config.furness_config.clone());
 
@@ -225,7 +227,7 @@ pub fn run_four_step_model(
         })?;
 
         let step_start = Instant::now();
-        assignment_result = run_assignment(network, auto_od, &config)?;
+        assignment_result = run_assignment(network, &igraph, auto_od, &config)?;
         t_assignment += step_start.elapsed();
 
         log_main!(
@@ -239,7 +241,12 @@ pub fn run_four_step_model(
 
         // Update skim from assignment costs for next feedback iteration
         if fb_iter + 1 < max_feedback {
-            skim = compute_skim_matrix(network, &assignment_result.link_costs, &zone_ids);
+            // Convert assignment link_costs HashMap to indexed Vec
+            for i in 0..igraph.num_links {
+                let lid = igraph.link_id(i);
+                skim_costs[i] = assignment_result.link_costs.get(&lid).copied().unwrap_or(0.0);
+            }
+            skim = igraph.compute_skim(&skim_costs, &zone_ids);
         }
 
         // If this is the last iteration, return results
@@ -279,21 +286,22 @@ pub fn run_four_step_model(
 /// in the model config.
 fn run_assignment(
     network: &Network,
+    graph: &IndexedGraph,
     od_matrix: &dyn OdMatrix,
     config: &ModelConfig,
 ) -> Result<AssignmentResult, crate::assignment::error::AssignmentError> {
     match config.assignment_method {
         AssignmentMethodType::FrankWolfe => {
             let method = FrankWolfe::new();
-            method.assign(network, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
         }
         AssignmentMethodType::Msa => {
             let method = Msa::new();
-            method.assign(network, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
         }
         AssignmentMethodType::GradientProjection => {
             let method = GradientProjection::with_step_scale(config.gp_step_scale);
-            method.assign(network, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
         }
     }
 }
@@ -315,7 +323,7 @@ fn time_skim_in_minutes(skim_hours: &DenseOdMatrix, zone_ids: &[ZoneID]) -> Dens
 fn distance_skim(network: &Network, zone_ids: &[ZoneID]) -> DenseOdMatrix {
     let mut result = DenseOdMatrix::new(zone_ids.to_vec());
 
-    for &oz in zone_ids {
+    for (i, &oz) in zone_ids.iter().enumerate() {
         let o_node = match network.get_zone_centroid(oz) {
             Ok(n) => n,
             Err(_) => continue,
@@ -325,8 +333,8 @@ fn distance_skim(network: &Network, zone_ids: &[ZoneID]) -> DenseOdMatrix {
             Err(_) => continue,
         };
 
-        for &dz in zone_ids {
-            if oz == dz {
+        for (j, &dz) in zone_ids.iter().enumerate() {
+            if i == j {
                 continue;
             }
             let d_node = match network.get_zone_centroid(dz) {
@@ -338,7 +346,7 @@ fn distance_skim(network: &Network, zone_ids: &[ZoneID]) -> DenseOdMatrix {
                 Err(_) => continue,
             };
 
-            result.set(oz, dz, haversine_km(o.latitude, o.longitude, d.latitude, d.longitude));
+            result.set_by_index(i, j, haversine_km(o.latitude, o.longitude, d.latitude, d.longitude));
         }
     }
 

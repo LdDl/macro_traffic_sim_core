@@ -37,8 +37,11 @@
 //!   Smaller values are more conservative but may converge slower.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 use super::error::AssignmentError;
+use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{LinkID, ZoneID};
 use crate::log_additional;
@@ -61,10 +64,18 @@ use super::{
 struct Path {
     /// Ordered sequence of link IDs from origin to destination.
     links: Vec<LinkID>,
+    /// Hash fingerprint of the links sequence (for fast equality check).
+    fingerprint: u64,
     /// Flow (demand) currently assigned to this path.
     flow: f64,
     /// Current travel cost (sum of link costs along the path).
     cost: f64,
+}
+
+fn path_fingerprint(links: &[LinkID]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    links.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Gradient Projection traffic assignment.
@@ -153,6 +164,7 @@ impl AssignmentMethod for GradientProjection {
     fn assign(
         &self,
         network: &Network,
+        _graph: &IndexedGraph,
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
@@ -194,10 +206,12 @@ impl AssignmentMethod for GradientProjection {
                 }
 
                 let cost = Self::path_cost(&path_links, &costs);
+                let fp = path_fingerprint(&path_links);
                 path_sets.insert(
                     (origin_zone, dest_zone),
                     vec![Path {
                         links: path_links,
+                        fingerprint: fp,
                         flow: demand,
                         cost,
                     }],
@@ -255,16 +269,21 @@ impl AssignmentMethod for GradientProjection {
                         continue;
                     }
                     let sp_cost = Self::path_cost(&sp_links, &costs);
+                    let sp_fp = path_fingerprint(&sp_links);
 
                     // Add shortest path to set if not already present
-                    let already_exists = paths.iter().any(|p| p.links == sp_links);
-                    if !already_exists {
-                        paths.push(Path {
-                            links: sp_links.clone(),
-                            flow: 0.0,
-                            cost: sp_cost,
-                        });
-                    }
+                    let sp_idx = match paths.iter().position(|p| p.fingerprint == sp_fp) {
+                        Some(idx) => idx,
+                        None => {
+                            paths.push(Path {
+                                links: sp_links,
+                                fingerprint: sp_fp,
+                                flow: 0.0,
+                                cost: sp_cost,
+                            });
+                            paths.len() - 1
+                        }
+                    };
 
                     let total_demand: f64 = paths.iter().map(|p| p.flow).sum();
                     let weighted_cost: f64 = paths.iter().map(|p| p.flow * p.cost).sum();
@@ -274,8 +293,8 @@ impl AssignmentMethod for GradientProjection {
                     // Gradient projection: shift flow from expensive paths to shortest
                     let step = self.step_scale / (iteration as f64).sqrt();
 
-                    for path in paths.iter_mut() {
-                        if path.links == sp_links {
+                    for (idx, path) in paths.iter_mut().enumerate() {
+                        if idx == sp_idx {
                             continue;
                         }
                         let cost_diff = path.cost - sp_cost;
@@ -289,13 +308,11 @@ impl AssignmentMethod for GradientProjection {
                     let current_total: f64 = paths.iter().map(|p| p.flow).sum();
                     let deficit = total_demand - current_total;
                     if deficit > 0.0 {
-                        if let Some(sp) = paths.iter_mut().find(|p| p.links == sp_links) {
-                            sp.flow += deficit;
-                        }
+                        paths[sp_idx].flow += deficit;
                     }
 
-                    // Remove paths with negligible flow
-                    paths.retain(|p| p.flow > 1e-10 || p.links == sp_links);
+                    // Remove paths with negligible flow (keep shortest path)
+                    paths.retain(|p| p.flow > 1e-10 || p.fingerprint == sp_fp);
                 }
             }
 
