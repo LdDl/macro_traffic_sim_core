@@ -228,7 +228,7 @@ impl MultinomialLogit {
 
         for i in 0..n {
             for j in 0..n {
-                let total_demand = total_od.get(zone_ids[i], zone_ids[j]);
+                let total_demand = total_od.get_by_index(i, j);
                 if total_demand <= 0.0 {
                     continue;
                 }

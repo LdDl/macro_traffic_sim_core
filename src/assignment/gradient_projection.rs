@@ -43,28 +43,20 @@ use std::collections::hash_map::DefaultHasher;
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::{LinkID, ZoneID};
+use crate::gmns::types::ZoneID;
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
-    compute_link_costs, compute_link_costs_into,
-    shortest_path::{build_path, dijkstra_one_to_all},
-};
+use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
 
-/// A path in the network with associated flow.
-///
-/// Represents one route between an OD pair. The gradient projection
-/// algorithm maintains a set of these per OD pair and shifts flow
-/// between them based on cost differences.
+/// A path stored as link indices for O(1) cost lookup.
 #[derive(Debug, Clone)]
 struct Path {
-    /// Ordered sequence of link IDs from origin to destination.
-    links: Vec<LinkID>,
-    /// Hash fingerprint of the links sequence (for fast equality check).
+    /// Ordered sequence of link indices (into IndexedGraph).
+    link_indices: Vec<usize>,
+    /// Hash fingerprint of the link indices (for fast equality check).
     fingerprint: u64,
     /// Flow (demand) currently assigned to this path.
     flow: f64,
@@ -72,10 +64,37 @@ struct Path {
     cost: f64,
 }
 
-fn path_fingerprint(links: &[LinkID]) -> u64 {
+fn path_fingerprint(link_indices: &[usize]) -> u64 {
     let mut hasher = DefaultHasher::new();
-    links.hash(&mut hasher);
+    link_indices.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Compute path cost from link index array and flat cost Vec.
+#[inline]
+fn path_cost_indexed(link_indices: &[usize], costs: &[f64]) -> f64 {
+    link_indices.iter().map(|&li| costs[li]).sum()
+}
+
+/// Build path as link indices by walking predecessors from dest to origin.
+fn build_path_indexed(
+    pred: &[Option<usize>],
+    graph: &IndexedGraph,
+    dest_idx: usize,
+) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut current = dest_idx;
+    loop {
+        match pred[current] {
+            Some(li) => {
+                path.push(li);
+                current = graph.link_source(li);
+            }
+            None => break,
+        }
+    }
+    path.reverse();
+    path
 }
 
 /// Gradient Projection traffic assignment.
@@ -122,36 +141,6 @@ impl GradientProjection {
     pub fn with_step_scale(step_scale: f64) -> Self {
         GradientProjection { step_scale }
     }
-
-    /// Compute the total cost of a path as the sum of its link costs.
-    ///
-    /// Returns `f64::INFINITY` for any link missing from the cost map.
-    fn path_cost(path_links: &[LinkID], link_costs: &HashMap<LinkID, f64>) -> f64 {
-        path_links
-            .iter()
-            .map(|&lid| link_costs.get(&lid).copied().unwrap_or(f64::INFINITY))
-            .sum()
-    }
-
-    /// Compute link volumes by summing flow across all active paths.
-    ///
-    /// Reuses the provided HashMap to avoid reallocation.
-    fn volumes_from_paths_into(
-        path_sets: &HashMap<(ZoneID, ZoneID), Vec<Path>>,
-        network: &Network,
-        out: &mut HashMap<LinkID, f64>,
-    ) {
-        for (&link_id, _) in &network.links {
-            out.insert(link_id, 0.0);
-        }
-        for paths in path_sets.values() {
-            for path in paths {
-                for &link_id in &path.links {
-                    *out.entry(link_id).or_insert(0.0) += path.flow;
-                }
-            }
-        }
-    }
 }
 
 impl Default for GradientProjection {
@@ -163,8 +152,8 @@ impl Default for GradientProjection {
 impl AssignmentMethod for GradientProjection {
     fn assign(
         &self,
-        network: &Network,
-        _graph: &IndexedGraph,
+        _network: &Network,
+        graph: &IndexedGraph,
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
@@ -172,18 +161,25 @@ impl AssignmentMethod for GradientProjection {
         log_main!(EVENT_ASSIGNMENT, "Starting Gradient Projection assignment",);
 
         let zone_ids = od_matrix.zone_ids().to_vec();
+        let n = graph.num_links;
 
-        let mut costs = compute_link_costs(network, &HashMap::new(), vdf);
+        let mut costs = vec![0.0; n];
+        let mut volumes = vec![0.0; n];
 
+        // Initialize with free-flow costs
+        graph.compute_costs(&volumes, vdf, &mut costs);
+
+        // path_sets keyed by (origin_zone, dest_zone)
         let mut path_sets: HashMap<(ZoneID, ZoneID), Vec<Path>> = HashMap::new();
 
+        // Initial shortest path loading
         for &origin_zone in &zone_ids {
-            let origin_node = match network.get_zone_centroid(origin_zone) {
-                Ok(n) => n,
-                Err(_) => continue,
+            let origin_idx = match graph.zone_node_idx(origin_zone) {
+                Some(i) => i,
+                None => continue,
             };
 
-            let spt = dijkstra_one_to_all(network, origin_node, &costs);
+            let (_, pred) = graph.dijkstra(origin_idx, &costs);
 
             for &dest_zone in &zone_ids {
                 if origin_zone == dest_zone {
@@ -195,22 +191,28 @@ impl AssignmentMethod for GradientProjection {
                     continue;
                 }
 
-                let dest_node = match network.get_zone_centroid(dest_zone) {
-                    Ok(n) => n,
-                    Err(_) => continue,
+                let dest_idx = match graph.zone_node_idx(dest_zone) {
+                    Some(i) => i,
+                    None => continue,
                 };
 
-                let path_links = build_path(&spt.predecessors, network, dest_node);
-                if path_links.is_empty() {
+                let link_indices = build_path_indexed(&pred, graph, dest_idx);
+                if link_indices.is_empty() {
                     continue;
                 }
 
-                let cost = Self::path_cost(&path_links, &costs);
-                let fp = path_fingerprint(&path_links);
+                let cost = path_cost_indexed(&link_indices, &costs);
+                let fp = path_fingerprint(&link_indices);
+
+                // Accumulate initial volumes
+                for &li in &link_indices {
+                    volumes[li] += demand;
+                }
+
                 path_sets.insert(
                     (origin_zone, dest_zone),
                     vec![Path {
-                        links: path_links,
+                        link_indices,
                         fingerprint: fp,
                         flow: demand,
                         cost,
@@ -219,8 +221,6 @@ impl AssignmentMethod for GradientProjection {
             }
         }
 
-        let mut volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
-        Self::volumes_from_paths_into(&path_sets, network, &mut volumes);
         let mut converged = false;
         let mut relative_gap = f64::MAX;
         let mut iteration = 0;
@@ -228,12 +228,13 @@ impl AssignmentMethod for GradientProjection {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            compute_link_costs_into(network, &volumes, vdf, &mut costs);
+            // Update costs from current volumes
+            graph.compute_costs(&volumes, vdf, &mut costs);
 
-            // Update path costs
+            // Update all path costs
             for paths in path_sets.values_mut() {
                 for path in paths.iter_mut() {
-                    path.cost = Self::path_cost(&path.links, &costs);
+                    path.cost = path_cost_indexed(&path.link_indices, &costs);
                 }
             }
 
@@ -242,12 +243,12 @@ impl AssignmentMethod for GradientProjection {
             let mut total_shortest_cost = 0.0;
 
             for &origin_zone in &zone_ids {
-                let origin_node = match network.get_zone_centroid(origin_zone) {
-                    Ok(n) => n,
-                    Err(_) => continue,
+                let origin_idx = match graph.zone_node_idx(origin_zone) {
+                    Some(i) => i,
+                    None => continue,
                 };
 
-                let spt = dijkstra_one_to_all(network, origin_node, &costs);
+                let (_, pred) = graph.dijkstra(origin_idx, &costs);
 
                 for &dest_zone in &zone_ids {
                     if origin_zone == dest_zone {
@@ -259,16 +260,16 @@ impl AssignmentMethod for GradientProjection {
                         None => continue,
                     };
 
-                    let dest_node = match network.get_zone_centroid(dest_zone) {
-                        Ok(n) => n,
-                        Err(_) => continue,
+                    let dest_idx = match graph.zone_node_idx(dest_zone) {
+                        Some(i) => i,
+                        None => continue,
                     };
 
-                    let sp_links = build_path(&spt.predecessors, network, dest_node);
+                    let sp_links = build_path_indexed(&pred, graph, dest_idx);
                     if sp_links.is_empty() {
                         continue;
                     }
-                    let sp_cost = Self::path_cost(&sp_links, &costs);
+                    let sp_cost = path_cost_indexed(&sp_links, &costs);
                     let sp_fp = path_fingerprint(&sp_links);
 
                     // Add shortest path to set if not already present
@@ -276,7 +277,7 @@ impl AssignmentMethod for GradientProjection {
                         Some(idx) => idx,
                         None => {
                             paths.push(Path {
-                                links: sp_links,
+                                link_indices: sp_links,
                                 fingerprint: sp_fp,
                                 flow: 0.0,
                                 cost: sp_cost,
@@ -316,7 +317,15 @@ impl AssignmentMethod for GradientProjection {
                 }
             }
 
-            Self::volumes_from_paths_into(&path_sets, network, &mut volumes);
+            // Rebuild volumes from all path flows
+            volumes.fill(0.0);
+            for paths in path_sets.values() {
+                for path in paths {
+                    for &li in &path.link_indices {
+                        volumes[li] += path.flow;
+                    }
+                }
+            }
 
             if total_cost > 0.0 {
                 relative_gap = (total_cost - total_shortest_cost) / total_cost;
@@ -337,8 +346,8 @@ impl AssignmentMethod for GradientProjection {
             }
         }
 
-        // Final cost computation (reuse allocation)
-        compute_link_costs_into(network, &volumes, vdf, &mut costs);
+        // Final cost computation
+        graph.compute_costs(&volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,
@@ -349,8 +358,8 @@ impl AssignmentMethod for GradientProjection {
         );
 
         Ok(AssignmentResult {
-            link_volumes: volumes,
-            link_costs: costs,
+            link_volumes: graph.volumes_to_hashmap(&volumes),
+            link_costs: graph.costs_to_hashmap(&costs),
             iterations: iteration,
             relative_gap,
             converged,

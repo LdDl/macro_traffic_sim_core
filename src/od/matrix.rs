@@ -161,4 +161,27 @@ pub trait OdMatrix {
     fn zone_count(&self) -> usize {
         self.zone_ids().len()
     }
+
+    /// Returns the demand for a given OD pair by row/column index.
+    ///
+    /// Default implementation converts indices to zone IDs and calls
+    /// [`get`](OdMatrix::get). Dense backends override this for O(1)
+    /// direct array access.
+    ///
+    /// # Panics
+    /// Panics if `i` or `j` are out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
+    ///
+    /// let mut od = DenseOdMatrix::new(vec![10, 20]);
+    /// od.set(10, 20, 42.0);
+    /// assert_eq!(od.get_by_index(0, 1), 42.0);
+    /// ```
+    fn get_by_index(&self, i: usize, j: usize) -> f64 {
+        let ids = self.zone_ids();
+        self.get(ids[i], ids[j])
+    }
 }

@@ -295,6 +295,11 @@ impl OdMatrix for DenseOdMatrix {
         }
         result
     }
+
+    #[inline]
+    fn get_by_index(&self, i: usize, j: usize) -> f64 {
+        self.data[i * self.n() + j]
+    }
 }
 
 #[cfg(test)]
