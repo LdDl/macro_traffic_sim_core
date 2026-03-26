@@ -138,12 +138,37 @@ pub fn furness_balance(
     target_attractions: &[f64],
     config: &FurnessConfig,
 ) -> Result<usize, TripDistributionError> {
+    let mut col_sums = vec![0.0; n];
+    let mut col_factors = vec![1.0; n];
+    furness_balance_with_buffers(
+        matrix,
+        n,
+        target_productions,
+        target_attractions,
+        config,
+        &mut col_sums,
+        &mut col_factors,
+    )
+}
+
+/// Same as [`furness_balance`] but accepts pre-allocated work buffers.
+///
+/// Both `col_sums` and `col_factors` must have length `n`.
+/// Their prior contents are overwritten each iteration.
+pub fn furness_balance_with_buffers(
+    matrix: &mut [f64],
+    n: usize,
+    target_productions: &[f64],
+    target_attractions: &[f64],
+    config: &FurnessConfig,
+    col_sums: &mut [f64],
+    col_factors: &mut [f64],
+) -> Result<usize, TripDistributionError> {
     assert_eq!(matrix.len(), n * n);
     assert_eq!(target_productions.len(), n);
     assert_eq!(target_attractions.len(), n);
-
-    let mut col_sums = vec![0.0; n];
-    let mut col_factors = vec![1.0; n];
+    assert_eq!(col_sums.len(), n);
+    assert_eq!(col_factors.len(), n);
 
     for iteration in 0..config.max_iterations {
         // Row scaling (row-major access - cache-friendly)

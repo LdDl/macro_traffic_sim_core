@@ -166,6 +166,10 @@ impl AssignmentMethod for GradientProjection {
         let mut costs = vec![0.0; n];
         let mut volumes = vec![0.0; n];
 
+        // Pre-allocate Dijkstra buffers (reused across all calls)
+        let mut dij_dist = vec![f64::INFINITY; graph.num_nodes];
+        let mut dij_pred: Vec<Option<usize>> = vec![None; graph.num_nodes];
+
         // Initialize with free-flow costs
         graph.compute_costs(&volumes, vdf, &mut costs);
 
@@ -179,7 +183,7 @@ impl AssignmentMethod for GradientProjection {
                 None => continue,
             };
 
-            let (_, pred) = graph.dijkstra(origin_idx, &costs);
+            graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred);
 
             for &dest_zone in &zone_ids {
                 if origin_zone == dest_zone {
@@ -196,7 +200,7 @@ impl AssignmentMethod for GradientProjection {
                     None => continue,
                 };
 
-                let link_indices = build_path_indexed(&pred, graph, dest_idx);
+                let link_indices = build_path_indexed(&dij_pred, graph, dest_idx);
                 if link_indices.is_empty() {
                     continue;
                 }
@@ -248,7 +252,7 @@ impl AssignmentMethod for GradientProjection {
                     None => continue,
                 };
 
-                let (_, pred) = graph.dijkstra(origin_idx, &costs);
+                graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred);
 
                 for &dest_zone in &zone_ids {
                     if origin_zone == dest_zone {
@@ -265,7 +269,7 @@ impl AssignmentMethod for GradientProjection {
                         None => continue,
                     };
 
-                    let sp_links = build_path_indexed(&pred, graph, dest_idx);
+                    let sp_links = build_path_indexed(&dij_pred, graph, dest_idx);
                     if sp_links.is_empty() {
                         continue;
                     }
