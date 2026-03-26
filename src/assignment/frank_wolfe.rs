@@ -47,6 +47,9 @@ use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERG
 
 use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
 
+const INV_PHI: f64 = 0.618_033_988_749_895;
+const TOL: f64 = 1e-8;
+
 /// Frank-Wolfe traffic assignment algorithm.
 ///
 /// Uses convex combinations with bisection line search on the
@@ -73,35 +76,47 @@ impl FrankWolfe {
         FrankWolfe
     }
 
-    /// Bisection line search on Vec-indexed data.
+    /// Golden section line search on Vec-indexed data.
+    ///
+    /// Finds lambda in [0, 1] minimizing the Beckmann objective along
+    /// the direction (auxiliary - current). Golden section reuses one
+    /// evaluation per iteration (22 evals for 20 iterations vs 40 for
+    /// bisection with numeric gradient).
     fn line_search(
         graph: &IndexedGraph,
         current: &[f64],
         auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
     ) -> f64 {
-        let mut lo = 0.0_f64;
-        let mut hi = 1.0_f64;
+
+        let mut a = 0.0_f64;
+        let mut b = 1.0_f64;
+
+        let mut x1 = b - INV_PHI * (b - a);
+        let mut x2 = a + INV_PHI * (b - a);
+        let mut f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1);
+        let mut f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2);
 
         for _ in 0..20 {
-            let mid = (lo + hi) / 2.0;
-
-            let eps = 1e-6;
-            let obj_mid = Self::eval_at_step(graph, current, auxiliary, vdf, mid);
-            let obj_mid_plus = Self::eval_at_step(graph, current, auxiliary, vdf, mid + eps);
-
-            if obj_mid_plus > obj_mid {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-
-            if (hi - lo) < 1e-8 {
+            if (b - a) < TOL {
                 break;
+            }
+            if f1 < f2 {
+                b = x2;
+                x2 = x1;
+                f2 = f1;
+                x1 = b - INV_PHI * (b - a);
+                f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1);
+            } else {
+                a = x1;
+                x1 = x2;
+                f1 = f2;
+                x2 = a + INV_PHI * (b - a);
+                f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2);
             }
         }
 
-        (lo + hi) / 2.0
+        (a + b) / 2.0
     }
 
     /// Evaluate the Beckmann objective at a given step size.
