@@ -157,6 +157,9 @@ impl VolumeDelayFunction for BprFunction {
         if capacity <= 0.0 {
             return f64::INFINITY;
         }
+        if volume <= 0.0 {
+            return 0.0;
+        }
         let ratio = volume / capacity;
         free_flow_time
             * (volume + self.alpha * capacity * self.ratio_pow_plus1(ratio) / (self.beta + 1.0))

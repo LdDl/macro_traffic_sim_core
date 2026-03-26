@@ -163,12 +163,17 @@ impl AssignmentMethod for GradientProjection {
         let zone_ids = od_matrix.zone_ids().to_vec();
         let n = graph.num_links;
 
+        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
+            .map(|&z| graph.zone_node_idx(z))
+            .collect();
+
         let mut costs = vec![0.0; n];
         let mut volumes = vec![0.0; n];
 
         // Pre-allocate Dijkstra buffers (reused across all calls)
         let mut dij_dist = vec![f64::INFINITY; graph.num_nodes];
         let mut dij_pred: Vec<Option<usize>> = vec![None; graph.num_nodes];
+        let mut dij_visited = vec![false; graph.num_nodes];
 
         // Initialize with free-flow costs
         graph.compute_costs(&volumes, vdf, &mut costs);
@@ -177,16 +182,16 @@ impl AssignmentMethod for GradientProjection {
         let mut path_sets: HashMap<(ZoneID, ZoneID), Vec<Path>> = HashMap::new();
 
         // Initial shortest path loading
-        for &origin_zone in &zone_ids {
-            let origin_idx = match graph.zone_node_idx(origin_zone) {
+        for (oi, &origin_zone) in zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[oi] {
                 Some(i) => i,
                 None => continue,
             };
 
-            graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred);
+            graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred, &mut dij_visited);
 
-            for &dest_zone in &zone_ids {
-                if origin_zone == dest_zone {
+            for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                if oi == di {
                     continue;
                 }
 
@@ -195,7 +200,7 @@ impl AssignmentMethod for GradientProjection {
                     continue;
                 }
 
-                let dest_idx = match graph.zone_node_idx(dest_zone) {
+                let dest_idx = match zone_node_idxs[di] {
                     Some(i) => i,
                     None => continue,
                 };
@@ -208,7 +213,6 @@ impl AssignmentMethod for GradientProjection {
                 let cost = path_cost_indexed(&link_indices, &costs);
                 let fp = path_fingerprint(&link_indices);
 
-                // Accumulate initial volumes
                 for &li in &link_indices {
                     volumes[li] += demand;
                 }
@@ -246,16 +250,16 @@ impl AssignmentMethod for GradientProjection {
             let mut total_cost = 0.0;
             let mut total_shortest_cost = 0.0;
 
-            for &origin_zone in &zone_ids {
-                let origin_idx = match graph.zone_node_idx(origin_zone) {
+            for (oi, &origin_zone) in zone_ids.iter().enumerate() {
+                let origin_idx = match zone_node_idxs[oi] {
                     Some(i) => i,
                     None => continue,
                 };
 
-                graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred);
+                graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred, &mut dij_visited);
 
-                for &dest_zone in &zone_ids {
-                    if origin_zone == dest_zone {
+                for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                    if oi == di {
                         continue;
                     }
 
@@ -264,7 +268,7 @@ impl AssignmentMethod for GradientProjection {
                         None => continue,
                     };
 
-                    let dest_idx = match graph.zone_node_idx(dest_zone) {
+                    let dest_idx = match zone_node_idxs[di] {
                         Some(i) => i,
                         None => continue,
                     };
@@ -290,13 +294,18 @@ impl AssignmentMethod for GradientProjection {
                         }
                     };
 
-                    let total_demand: f64 = paths.iter().map(|p| p.flow).sum();
-                    let weighted_cost: f64 = paths.iter().map(|p| p.flow * p.cost).sum();
+                    let mut total_demand = 0.0;
+                    let mut weighted_cost = 0.0;
+                    for path in paths.iter() {
+                        total_demand += path.flow;
+                        weighted_cost += path.flow * path.cost;
+                    }
                     total_cost += weighted_cost;
                     total_shortest_cost += total_demand * sp_cost;
 
-                    // Gradient projection: shift flow from expensive paths to shortest
+                    // Gradient projection: shift flow, track deficit inline
                     let step = self.step_scale / (iteration as f64).sqrt();
+                    let mut deficit = 0.0;
 
                     for (idx, path) in paths.iter_mut().enumerate() {
                         if idx == sp_idx {
@@ -306,12 +315,10 @@ impl AssignmentMethod for GradientProjection {
                         if cost_diff > 0.0 && path.flow > 0.0 {
                             let shift = (step * cost_diff * path.flow).min(path.flow);
                             path.flow -= shift;
+                            deficit += shift;
                         }
                     }
 
-                    // Collect flow that was removed and add to shortest path
-                    let current_total: f64 = paths.iter().map(|p| p.flow).sum();
-                    let deficit = total_demand - current_total;
                     if deficit > 0.0 {
                         paths[sp_idx].flow += deficit;
                     }

@@ -186,7 +186,7 @@ impl GravityModel {
         let mut imp = vec![0.0; n * n];
         for i in 0..n {
             for j in 0..n {
-                let cost = cost_matrix.get(zone_ids[i], zone_ids[j]);
+                let cost = cost_matrix.get_by_index(i, j);
                 if cost > 0.0 && cost.is_finite() {
                     imp[i * n + j] = impedance.compute(cost);
                 }

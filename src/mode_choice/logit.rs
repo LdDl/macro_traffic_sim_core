@@ -223,12 +223,18 @@ impl MultinomialLogit {
             .map(|_| DenseOdMatrix::new(zone_ids.clone()))
             .collect();
 
-        // Pre-resolve skim references (avoid HashMap lookup per OD pair)
-        let skim_refs: Vec<Option<&ModeSkim>> = self
-            .utilities
-            .iter()
-            .map(|u| skims.get(&u.agent_type))
-            .collect();
+        // Pre-resolve and validate skim references
+        let mut skim_refs: Vec<&ModeSkim> = Vec::with_capacity(num_modes);
+        for utility in &self.utilities {
+            match skims.get(&utility.agent_type) {
+                Some(skim) => skim_refs.push(skim),
+                None => {
+                    return Err(ModeChoiceError::MissingSkim(
+                        format!("{:?}", utility.agent_type),
+                    ));
+                }
+            }
+        }
 
         // Reusable buffer for utilities per OD pair
         let mut v_buf: Vec<f64> = vec![0.0; num_modes];
@@ -243,15 +249,10 @@ impl MultinomialLogit {
                 // Compute utilities and find max in one pass
                 let mut v_max = f64::NEG_INFINITY;
                 for (k, utility) in self.utilities.iter().enumerate() {
-                    let (time, distance, cost) = if let Some(skim) = skim_refs[k] {
-                        (
-                            skim.time.get_by_index(i, j),
-                            skim.distance.get_by_index(i, j),
-                            skim.cost.get_by_index(i, j),
-                        )
-                    } else {
-                        (0.0, 0.0, 0.0)
-                    };
+                    let skim = skim_refs[k];
+                    let time = skim.time.get_by_index(i, j);
+                    let distance = skim.distance.get_by_index(i, j);
+                    let cost = skim.cost.get_by_index(i, j);
                     let v = utility.compute(time, distance, cost);
                     v_buf[k] = v;
                     if v > v_max {

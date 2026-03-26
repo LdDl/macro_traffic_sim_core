@@ -157,35 +157,42 @@ impl IndexedGraph {
     ) -> (Vec<f64>, Vec<Option<usize>>) {
         let mut dist = vec![f64::INFINITY; self.num_nodes];
         let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];
-        self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred);
+        let mut visited = vec![false; self.num_nodes];
+        self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred, &mut visited);
         (dist, pred)
     }
 
     /// Run Dijkstra into pre-allocated buffers (avoids allocation per call).
     ///
-    /// `dist` and `pred` must have length `num_nodes`. They are reset
-    /// at the start, so prior contents do not matter.
+    /// `dist`, `pred`, and `visited` must have length `num_nodes`.
+    /// They are reset at the start, so prior contents do not matter.
     pub fn dijkstra_into(
         &self,
         origin_idx: usize,
         link_costs: &[f64],
         dist: &mut [f64],
         pred: &mut [Option<usize>],
+        visited: &mut [bool],
     ) {
         dist.iter_mut().for_each(|d| *d = f64::INFINITY);
         pred.iter_mut().for_each(|p| *p = None);
+        visited.iter_mut().for_each(|v| *v = false);
         dist[origin_idx] = 0.0;
 
         let mut heap: BinaryHeap<Reverse<(OrderedFloat<f64>, usize)>> = BinaryHeap::new();
         heap.push(Reverse((OrderedFloat(0.0), origin_idx)));
 
         while let Some(Reverse((OrderedFloat(d), u))) = heap.pop() {
-            if d > dist[u] {
+            if visited[u] {
                 continue;
             }
+            visited[u] = true;
             let start = self.row_ptr[u];
             let end = self.row_ptr[u + 1];
             for &(v, li) in &self.edges[start..end] {
+                if visited[v] {
+                    continue;
+                }
                 let cost = link_costs[li];
                 if !cost.is_finite() {
                     continue;
@@ -212,31 +219,35 @@ impl IndexedGraph {
         volumes.fill(0.0);
         let zone_ids = od_matrix.zone_ids();
 
+        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
+            .map(|&z| self.zone_node_idx(z))
+            .collect();
+
         let mut dist = vec![f64::INFINITY; self.num_nodes];
         let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];
+        let mut visited = vec![false; self.num_nodes];
 
-        for &origin_zone in zone_ids {
-            let origin_idx = match self.zone_node_idx(origin_zone) {
+        for (oi, &origin_zone) in zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[oi] {
                 Some(i) => i,
                 None => continue,
             };
 
-            self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred);
+            self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred, &mut visited);
 
-            for &dest_zone in zone_ids {
-                if origin_zone == dest_zone {
+            for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                if oi == di {
                     continue;
                 }
                 let demand = od_matrix.get(origin_zone, dest_zone);
                 if demand <= 0.0 {
                     continue;
                 }
-                let dest_idx = match self.zone_node_idx(dest_zone) {
+                let dest_idx = match zone_node_idxs[di] {
                     Some(i) => i,
                     None => continue,
                 };
 
-                // Walk predecessors, accumulate demand
                 let mut current = dest_idx;
                 loop {
                     match pred[current] {
@@ -304,22 +315,27 @@ impl IndexedGraph {
     ) -> crate::od::dense::DenseOdMatrix {
         let mut skim = crate::od::dense::DenseOdMatrix::new(zone_ids.to_vec());
 
+        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
+            .map(|&z| self.zone_node_idx(z))
+            .collect();
+
         let mut dist = vec![f64::INFINITY; self.num_nodes];
         let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];
+        let mut visited = vec![false; self.num_nodes];
 
-        for (i, &oz) in zone_ids.iter().enumerate() {
-            let origin_idx = match self.zone_node_idx(oz) {
+        for (i, _) in zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[i] {
                 Some(idx) => idx,
                 None => continue,
             };
 
-            self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred);
+            self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred, &mut visited);
 
-            for (j, &dz) in zone_ids.iter().enumerate() {
+            for j in 0..zone_ids.len() {
                 if i == j {
                     continue;
                 }
-                let dest_idx = match self.zone_node_idx(dz) {
+                let dest_idx = match zone_node_idxs[j] {
                     Some(idx) => idx,
                     None => continue,
                 };
