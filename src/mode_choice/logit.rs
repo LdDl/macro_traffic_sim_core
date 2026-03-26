@@ -20,6 +20,7 @@
 //!
 //! ```
 //! use std::collections::HashMap;
+//! use std::rc::Rc;
 //! use macro_traffic_sim_core::gmns::types::AgentType;
 //! use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
 //! use macro_traffic_sim_core::mode_choice::{MultinomialLogit, ModeSkim};
@@ -28,14 +29,18 @@
 //! let mut total_od = DenseOdMatrix::new(zones.clone());
 //! total_od.set(1, 2, 1000.0);
 //!
+//! // Shared zero matrices for distance and cost
+//! let zero_dist = Rc::new(DenseOdMatrix::new(zones.clone()));
+//! let zero_cost = Rc::new(DenseOdMatrix::new(zones.clone()));
+//!
 //! // Skim matrices: 10 min by car, 25 min by bike, 40 min on foot
 //! let make_skim = |time_val: f64| -> ModeSkim {
 //!     let mut time = DenseOdMatrix::new(zones.clone());
 //!     time.set(1, 2, time_val);
 //!     ModeSkim {
 //!         time,
-//!         distance: DenseOdMatrix::new(zones.clone()),
-//!         cost: DenseOdMatrix::new(zones.clone()),
+//!         distance: Rc::clone(&zero_dist),
+//!         cost: Rc::clone(&zero_cost),
 //!     }
 //! };
 //!
@@ -61,6 +66,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::error::ModeChoiceError;
 use crate::gmns::types::AgentType;
@@ -79,6 +85,7 @@ use super::utility::ModeUtility;
 /// # Examples
 ///
 /// ```
+/// use std::rc::Rc;
 /// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
 /// use macro_traffic_sim_core::mode_choice::ModeSkim;
 ///
@@ -88,20 +95,20 @@ use super::utility::ModeUtility;
 ///
 /// let skim = ModeSkim {
 ///     time,
-///     distance: DenseOdMatrix::new(zones.clone()),
-///     cost: DenseOdMatrix::new(zones.clone()),
+///     distance: Rc::new(DenseOdMatrix::new(zones.clone())),
+///     cost: Rc::new(DenseOdMatrix::new(zones.clone())),
 /// };
 ///
 /// assert_eq!(skim.time.get(1, 2), 15.0);
 /// ```
 #[derive(Debug)]
 pub struct ModeSkim {
-    /// Travel time matrix (minutes).
+    /// Travel time matrix (minutes). Unique per mode.
     pub time: DenseOdMatrix,
-    /// Travel distance matrix (km).
-    pub distance: DenseOdMatrix,
-    /// Monetary cost matrix.
-    pub cost: DenseOdMatrix,
+    /// Travel distance matrix (km). Shared across modes via Rc.
+    pub distance: Rc<DenseOdMatrix>,
+    /// Monetary cost matrix. Shared across modes via Rc.
+    pub cost: Rc<DenseOdMatrix>,
 }
 
 /// Multinomial logit mode choice model.

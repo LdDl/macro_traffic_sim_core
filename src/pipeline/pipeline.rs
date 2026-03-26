@@ -6,6 +6,7 @@
 //! of steps, feedback loop, and skim computation.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::error::PipelineError;
@@ -145,8 +146,9 @@ pub fn run_four_step_model(
 
     let gravity = GravityModel::with_furness_config(config.furness_config.clone());
 
-    // Distance skim is invariant across feedback iterations (geometry doesn't change)
-    let distance_skim_matrix = distance_skim(network, &zone_ids);
+    // Distance skim is invariant across feedback iterations (geometry doesn't change).
+    // Wrapped in Rc to share across all 3 mode skims without cloning.
+    let distance_skim_rc = Rc::new(distance_skim(network, &zone_ids));
 
     let mut total_od;
     let mut mode_od;
@@ -181,17 +183,17 @@ pub fn run_four_step_model(
         let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
-        let zero_cost = DenseOdMatrix::new(zone_ids.clone());
+        let zero_cost = Rc::new(DenseOdMatrix::new(zone_ids.clone()));
 
-        let bike_time = speed_based_time_skim(&distance_skim_matrix, &zone_ids, 15.0);
-        let walk_time = speed_based_time_skim(&distance_skim_matrix, &zone_ids, 5.0);
+        let bike_time = speed_based_time_skim(&distance_skim_rc, &zone_ids, 15.0);
+        let walk_time = speed_based_time_skim(&distance_skim_rc, &zone_ids, 5.0);
 
         mode_skims.insert(
             AgentType::Walk,
             ModeSkim {
                 time: walk_time,
-                distance: distance_skim_matrix.clone(),
-                cost: zero_cost.clone(),
+                distance: Rc::clone(&distance_skim_rc),
+                cost: Rc::clone(&zero_cost),
             },
         );
 
@@ -199,8 +201,8 @@ pub fn run_four_step_model(
             AgentType::Bike,
             ModeSkim {
                 time: bike_time,
-                distance: distance_skim_matrix.clone(),
-                cost: zero_cost.clone(),
+                distance: Rc::clone(&distance_skim_rc),
+                cost: Rc::clone(&zero_cost),
             },
         );
 
@@ -208,8 +210,8 @@ pub fn run_four_step_model(
             AgentType::Auto,
             ModeSkim {
                 time: auto_time,
-                distance: distance_skim_matrix.clone(),
-                cost: zero_cost,
+                distance: Rc::clone(&distance_skim_rc),
+                cost: Rc::clone(&zero_cost),
             },
         );
 
