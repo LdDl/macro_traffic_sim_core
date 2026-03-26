@@ -85,13 +85,12 @@ pub fn dijkstra_one_to_all(
             }
         }
 
-        // Explore outgoing links
         let outgoing = match network.outgoing_links(node_id) {
-            Ok(links) => links.to_vec(),
+            Ok(links) => links,
             Err(_) => continue,
         };
 
-        for &link_id in &outgoing {
+        for &link_id in outgoing {
             let link_cost = link_costs.get(&link_id).copied().unwrap_or(f64::INFINITY);
             if !link_cost.is_finite() {
                 continue;
@@ -171,10 +170,26 @@ pub fn all_or_nothing(
     od_matrix: &dyn OdMatrix,
     link_costs: &HashMap<LinkID, f64>,
 ) -> Result<HashMap<LinkID, f64>, AssignmentError> {
-    let mut volumes: HashMap<LinkID, f64> = HashMap::new();
-
+    let mut volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
     for &link_id in network.links.keys() {
         volumes.insert(link_id, 0.0);
+    }
+    all_or_nothing_into(network, od_matrix, link_costs, &mut volumes)?;
+    Ok(volumes)
+}
+
+/// Perform all-or-nothing assignment into a pre-allocated HashMap.
+///
+/// Same as [`all_or_nothing`] but reuses the provided map, zeroing it first.
+/// Call this in hot loops to avoid allocating a new HashMap per iteration.
+pub fn all_or_nothing_into(
+    network: &Network,
+    od_matrix: &dyn OdMatrix,
+    link_costs: &HashMap<LinkID, f64>,
+    volumes: &mut HashMap<LinkID, f64>,
+) -> Result<(), AssignmentError> {
+    for vol in volumes.values_mut() {
+        *vol = 0.0;
     }
 
     let zone_ids = od_matrix.zone_ids().to_vec();
@@ -203,15 +218,25 @@ pub fn all_or_nothing(
                 Err(_) => continue,
             };
 
-            // Build path and load demand
-            let path = build_path(&spt.predecessors, network, dest_node);
-            for &link_id in &path {
-                *volumes.entry(link_id).or_insert(0.0) += demand;
+            // Walk predecessors directly, accumulating demand without
+            // allocating a path Vec (order does not matter for volumes).
+            let mut current = dest_node;
+            loop {
+                match spt.predecessors.get(&current) {
+                    Some(Some(link_id)) => {
+                        *volumes.entry(*link_id).or_insert(0.0) += demand;
+                        match network.link_source(*link_id) {
+                            Ok(source) => current = source,
+                            Err(_) => break,
+                        }
+                    }
+                    _ => break,
+                }
             }
         }
     }
 
-    Ok(volumes)
+    Ok(())
 }
 
 /// Compute a zone-to-zone cost (skim) matrix from shortest path trees.

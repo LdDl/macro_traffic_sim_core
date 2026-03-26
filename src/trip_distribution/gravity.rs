@@ -180,19 +180,29 @@ impl GravityModel {
             ));
         }
 
+        // Pre-compute impedance values for all zone pairs (one pass).
+        // Avoids calling impedance.compute() twice per (i,j) pair
+        // and eliminates repeated zone-index HashMap lookups.
+        let mut imp = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                let cost = cost_matrix.get(zone_ids[i], zone_ids[j]);
+                if cost > 0.0 && cost.is_finite() {
+                    imp[i * n + j] = impedance.compute(cost);
+                }
+            }
+        }
+
         let mut data = vec![0.0; n * n];
         for i in 0..n {
             if productions[i] <= 0.0 {
                 continue;
             }
+            let row = i * n;
             let mut denom = 0.0;
             for k in 0..n {
-                if attractions[k] <= 0.0 {
-                    continue;
-                }
-                let cost = cost_matrix.get(zone_ids[i], zone_ids[k]);
-                if cost > 0.0 && cost.is_finite() {
-                    denom += attractions[k] * impedance.compute(cost);
+                if attractions[k] > 0.0 {
+                    denom += attractions[k] * imp[row + k];
                 }
             }
 
@@ -201,13 +211,8 @@ impl GravityModel {
             }
 
             for j in 0..n {
-                if attractions[j] <= 0.0 {
-                    continue;
-                }
-                let cost = cost_matrix.get(zone_ids[i], zone_ids[j]);
-                if cost > 0.0 && cost.is_finite() {
-                    let f_val = impedance.compute(cost);
-                    data[i * n + j] = productions[i] * attractions[j] * f_val / denom;
+                if attractions[j] > 0.0 && imp[row + j] > 0.0 {
+                    data[row + j] = productions[i] * attractions[j] * imp[row + j] / denom;
                 }
             }
         }

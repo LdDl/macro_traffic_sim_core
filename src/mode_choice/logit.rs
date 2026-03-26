@@ -227,10 +227,8 @@ impl MultinomialLogit {
         let mut v_buf: Vec<f64> = vec![0.0; num_modes];
 
         for i in 0..n {
-            let oi = zone_ids[i];
             for j in 0..n {
-                let dj = zone_ids[j];
-                let total_demand = total_od.get(oi, dj);
+                let total_demand = total_od.get(zone_ids[i], zone_ids[j]);
                 if total_demand <= 0.0 {
                     continue;
                 }
@@ -240,9 +238,9 @@ impl MultinomialLogit {
                 for (k, utility) in self.utilities.iter().enumerate() {
                     let (time, distance, cost) = if let Some(skim) = skim_refs[k] {
                         (
-                            skim.time.get(oi, dj),
-                            skim.distance.get(oi, dj),
-                            skim.cost.get(oi, dj),
+                            skim.time.get_by_index(i, j),
+                            skim.distance.get_by_index(i, j),
+                            skim.cost.get_by_index(i, j),
                         )
                     } else {
                         (0.0, 0.0, 0.0)
@@ -262,7 +260,7 @@ impl MultinomialLogit {
 
                 for k in 0..num_modes {
                     let prob = (v_buf[k] - v_max).exp() / exp_sum;
-                    result_matrices[k].set(oi, dj, total_demand * prob);
+                    result_matrices[k].set_by_index(i, j, total_demand * prob);
                 }
             }
         }

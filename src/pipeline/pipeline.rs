@@ -304,8 +304,7 @@ fn time_skim_in_minutes(skim_hours: &DenseOdMatrix, zone_ids: &[ZoneID]) -> Dens
     let mut result = DenseOdMatrix::new(zone_ids.to_vec());
     for i in 0..n {
         for j in 0..n {
-            let hours = skim_hours.get(zone_ids[i], zone_ids[j]);
-            result.set(zone_ids[i], zone_ids[j], hours * 60.0);
+            result.set_by_index(i, j, skim_hours.get_by_index(i, j) * 60.0);
         }
     }
     result
@@ -381,9 +380,9 @@ fn speed_based_time_skim(
     let mut result = DenseOdMatrix::new(zone_ids.to_vec());
     for i in 0..n {
         for j in 0..n {
-            let dist = distance.get(zone_ids[i], zone_ids[j]);
+            let dist = distance.get_by_index(i, j);
             if dist > 0.0 {
-                result.set(zone_ids[i], zone_ids[j], dist / speed_kmh * 60.0);
+                result.set_by_index(i, j, dist / speed_kmh * 60.0);
             }
         }
     }

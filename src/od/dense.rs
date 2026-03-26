@@ -165,6 +165,23 @@ impl DenseOdMatrix {
         }
     }
 
+    /// Get value by row/column index (no HashMap lookup).
+    ///
+    /// Use this in hot loops where you already have the index.
+    #[inline]
+    pub fn get_by_index(&self, i: usize, j: usize) -> f64 {
+        self.data[i * self.n() + j]
+    }
+
+    /// Set value by row/column index (no HashMap lookup).
+    ///
+    /// Use this in hot loops where you already have the index.
+    #[inline]
+    pub fn set_by_index(&mut self, i: usize, j: usize, value: f64) {
+        let n = self.n();
+        self.data[i * n + j] = value;
+    }
+
     /// Get mutable access to the raw data slice.
     ///
     /// This is useful for bulk operations like Furness balancing that

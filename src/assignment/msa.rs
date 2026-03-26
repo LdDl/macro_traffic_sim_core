@@ -32,6 +32,7 @@ use std::collections::HashMap;
 
 use super::error::AssignmentError;
 use crate::gmns::meso::network::Network;
+use crate::gmns::types::LinkID;
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
@@ -40,7 +41,7 @@ use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERG
 use super::{
     AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
     compute_link_costs, compute_link_costs_into, compute_relative_gap,
-    shortest_path::all_or_nothing,
+    shortest_path::{all_or_nothing, all_or_nothing_into},
 };
 
 /// Method of Successive Averages traffic assignment.
@@ -87,6 +88,12 @@ impl AssignmentMethod for Msa {
         // Initial all-or-nothing assignment
         let mut volumes = all_or_nothing(network, od_matrix, &costs)?;
 
+        // Pre-allocate auxiliary volumes (reused every iteration)
+        let mut aux_volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
+        for &link_id in network.links.keys() {
+            aux_volumes.insert(link_id, 0.0);
+        }
+
         let mut converged = false;
         let mut relative_gap = f64::MAX;
         let mut iteration = 0;
@@ -97,8 +104,8 @@ impl AssignmentMethod for Msa {
             // Update link costs (reuse allocation)
             compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
-            // All-or-nothing with current costs
-            let aux_volumes = all_or_nothing(network, od_matrix, &costs)?;
+            // All-or-nothing with current costs (reuse allocation)
+            all_or_nothing_into(network, od_matrix, &costs, &mut aux_volumes)?;
 
             relative_gap = compute_relative_gap(&volumes, &costs, &aux_volumes);
 

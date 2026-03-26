@@ -34,3 +34,8 @@ path = "examples/grid_city/main.rs"
 
 [dev-dependencies]
 csv = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "assignment"
+harness = false

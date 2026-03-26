@@ -10,6 +10,8 @@ use crate::gmns::meso::network::Network;
 use crate::gmns::types::LinkID;
 use crate::od::OdMatrix;
 
+const EPS_BETA: f64 = 1e-12;
+
 /// Trait for volume-delay functions.
 ///
 /// Models the relationship between link volume and travel time.
@@ -75,6 +77,9 @@ pub struct BprFunction {
     pub alpha: f64,
     /// Beta parameter.
     pub beta: f64,
+    // Cached integer beta for fast exponentiation.
+    // Some(n) when beta is close to a positive integer, None otherwise.
+    beta_int: Option<u32>,
 }
 
 impl BprFunction {
@@ -90,15 +95,51 @@ impl BprFunction {
     /// assert_eq!(bpr.beta, 5.0);
     /// ```
     pub fn new(alpha: f64, beta: f64) -> Self {
-        BprFunction { alpha, beta }
+        BprFunction {
+            alpha,
+            beta,
+            beta_int: Self::detect_integer_beta(beta),
+        }
+    }
+
+    // If beta is within EPS_BETA of a positive integer, return that integer.
+    fn detect_integer_beta(beta: f64) -> Option<u32> {
+        if beta < 0.0 || !beta.is_finite() {
+            return None;
+        }
+        let rounded = beta.round();
+        if (beta - rounded).abs() < EPS_BETA && rounded >= 1.0 && rounded <= 20.0 {
+            Some(rounded as u32)
+        } else {
+            None
+        }
     }
 }
 
 impl Default for BprFunction {
     fn default() -> Self {
-        BprFunction {
-            alpha: 0.15,
-            beta: 4.0,
+        BprFunction::new(0.15, 4.0)
+    }
+}
+
+impl BprFunction {
+    // Raise ratio to power beta using integer exponentiation when possible.
+    // For integer beta values (e.g. standard beta=4), uses powi() which
+    // I believe should be faster than powf().
+    #[inline]
+    fn ratio_pow(&self, ratio: f64) -> f64 {
+        match self.beta_int {
+            Some(n) => ratio.powi(n as i32),
+            None => ratio.powf(self.beta),
+        }
+    }
+
+    // Raise ratio to power (beta + 1).
+    #[inline]
+    fn ratio_pow_plus1(&self, ratio: f64) -> f64 {
+        match self.beta_int {
+            Some(n) => ratio.powi(n as i32 + 1),
+            None => ratio.powf(self.beta + 1.0),
         }
     }
 }
@@ -108,7 +149,7 @@ impl VolumeDelayFunction for BprFunction {
         if capacity <= 0.0 {
             return f64::INFINITY;
         }
-        free_flow_time * (1.0 + self.alpha * (volume / capacity).powf(self.beta))
+        free_flow_time * (1.0 + self.alpha * self.ratio_pow(volume / capacity))
     }
 
     fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
@@ -117,7 +158,7 @@ impl VolumeDelayFunction for BprFunction {
         }
         let ratio = volume / capacity;
         free_flow_time
-            * (volume + self.alpha * capacity * ratio.powf(self.beta + 1.0) / (self.beta + 1.0))
+            * (volume + self.alpha * capacity * self.ratio_pow_plus1(ratio) / (self.beta + 1.0))
     }
 }
 
