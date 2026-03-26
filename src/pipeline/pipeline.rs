@@ -145,6 +145,9 @@ pub fn run_four_step_model(
 
     let gravity = GravityModel::with_furness_config(config.furness_config.clone());
 
+    // Distance skim is invariant across feedback iterations (geometry doesn't change)
+    let distance_skim_matrix = distance_skim(network, &zone_ids);
+
     let mut total_od;
     let mut mode_od;
     let mut assignment_result;
@@ -178,18 +181,16 @@ pub fn run_four_step_model(
         let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
-        let auto_distance = distance_skim(network, &zone_ids);
         let zero_cost = DenseOdMatrix::new(zone_ids.clone());
 
-        // Compute time skims before moving auto_distance
-        let bike_time = speed_based_time_skim(&auto_distance, &zone_ids, 15.0);
-        let walk_time = speed_based_time_skim(&auto_distance, &zone_ids, 5.0);
+        let bike_time = speed_based_time_skim(&distance_skim_matrix, &zone_ids, 15.0);
+        let walk_time = speed_based_time_skim(&distance_skim_matrix, &zone_ids, 5.0);
 
         mode_skims.insert(
             AgentType::Walk,
             ModeSkim {
                 time: walk_time,
-                distance: auto_distance.clone(),
+                distance: distance_skim_matrix.clone(),
                 cost: zero_cost.clone(),
             },
         );
@@ -198,7 +199,7 @@ pub fn run_four_step_model(
             AgentType::Bike,
             ModeSkim {
                 time: bike_time,
-                distance: auto_distance.clone(),
+                distance: distance_skim_matrix.clone(),
                 cost: zero_cost.clone(),
             },
         );
@@ -207,7 +208,7 @@ pub fn run_four_step_model(
             AgentType::Auto,
             ModeSkim {
                 time: auto_time,
-                distance: auto_distance,
+                distance: distance_skim_matrix.clone(),
                 cost: zero_cost,
             },
         );
