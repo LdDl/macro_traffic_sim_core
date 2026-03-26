@@ -427,7 +427,7 @@ so all row factors = 1.0 -- no change.
 
 **Iteration 1: Column scaling**
 
-Scale each column: $\text{factor}_j = A_j / \text{col\_sum}_j$
+Scale each column: $f_j = A_j / S_j$ where $S_j$ is the current column sum
 
 | Column | Current sum | Target $A_j$ | Factor |
 |--------|------------|--------------|--------|
