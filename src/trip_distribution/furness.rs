@@ -143,6 +143,7 @@ pub fn furness_balance(
     assert_eq!(target_attractions.len(), n);
 
     for iteration in 0..config.max_iterations {
+        // Row scaling
         for i in 0..n {
             let row_sum: f64 = (0..n).map(|j| matrix[i * n + j]).sum();
             if row_sum > 0.0 && target_productions[i] > 0.0 {
@@ -153,6 +154,7 @@ pub fn furness_balance(
             }
         }
 
+        // Column scaling
         for j in 0..n {
             let col_sum: f64 = (0..n).map(|i| matrix[i * n + j]).sum();
             if col_sum > 0.0 && target_attractions[j] > 0.0 {
@@ -163,20 +165,14 @@ pub fn furness_balance(
             }
         }
 
+        // After column scaling, column sums match targets exactly.
+        // Only need to check row sums for convergence (1 scan instead of 2).
         let mut max_error = 0.0_f64;
 
         for i in 0..n {
-            let row_sum: f64 = (0..n).map(|j| matrix[i * n + j]).sum();
             if target_productions[i] > 0.0 {
+                let row_sum: f64 = (0..n).map(|j| matrix[i * n + j]).sum();
                 let err = ((row_sum - target_productions[i]) / target_productions[i]).abs();
-                max_error = max_error.max(err);
-            }
-        }
-
-        for j in 0..n {
-            let col_sum: f64 = (0..n).map(|i| matrix[i * n + j]).sum();
-            if target_attractions[j] > 0.0 {
-                let err = ((col_sum - target_attractions[j]) / target_attractions[j]).abs();
                 max_error = max_error.max(err);
             }
         }

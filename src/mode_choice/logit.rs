@@ -207,55 +207,73 @@ impl MultinomialLogit {
     ) -> Result<HashMap<AgentType, DenseOdMatrix>, ModeChoiceError> {
         let zone_ids = total_od.zone_ids().to_vec();
         let n = zone_ids.len();
+        let num_modes = self.utilities.len();
 
-        let mut result: HashMap<AgentType, DenseOdMatrix> = HashMap::new();
-        for utility in &self.utilities {
-            result.insert(utility.agent_type, DenseOdMatrix::new(zone_ids.clone()));
-        }
+        // Pre-allocate result matrices as a Vec (indexed access, no HashMap lookups)
+        let mut result_matrices: Vec<DenseOdMatrix> = self
+            .utilities
+            .iter()
+            .map(|_| DenseOdMatrix::new(zone_ids.clone()))
+            .collect();
+
+        // Pre-resolve skim references (avoid HashMap lookup per OD pair)
+        let skim_refs: Vec<Option<&ModeSkim>> = self
+            .utilities
+            .iter()
+            .map(|u| skims.get(&u.agent_type))
+            .collect();
+
+        // Reusable buffer for utilities per OD pair
+        let mut v_buf: Vec<f64> = vec![0.0; num_modes];
 
         for i in 0..n {
+            let oi = zone_ids[i];
             for j in 0..n {
-                let total_demand = total_od.get(zone_ids[i], zone_ids[j]);
+                let dj = zone_ids[j];
+                let total_demand = total_od.get(oi, dj);
                 if total_demand <= 0.0 {
                     continue;
                 }
 
-                let mut v_values: Vec<(AgentType, f64)> = Vec::with_capacity(self.utilities.len());
-                for utility in &self.utilities {
-                    let (time, distance, cost) = if let Some(skim) = skims.get(&utility.agent_type)
-                    {
+                // Compute utilities and find max in one pass
+                let mut v_max = f64::NEG_INFINITY;
+                for (k, utility) in self.utilities.iter().enumerate() {
+                    let (time, distance, cost) = if let Some(skim) = skim_refs[k] {
                         (
-                            skim.time.get(zone_ids[i], zone_ids[j]),
-                            skim.distance.get(zone_ids[i], zone_ids[j]),
-                            skim.cost.get(zone_ids[i], zone_ids[j]),
+                            skim.time.get(oi, dj),
+                            skim.distance.get(oi, dj),
+                            skim.cost.get(oi, dj),
                         )
                     } else {
                         (0.0, 0.0, 0.0)
                     };
-
                     let v = utility.compute(time, distance, cost);
-                    v_values.push((utility.agent_type, v));
+                    v_buf[k] = v;
+                    if v > v_max {
+                        v_max = v;
+                    }
                 }
 
-                let v_max = v_values
-                    .iter()
-                    .map(|&(_, v)| v)
-                    .fold(f64::NEG_INFINITY, f64::max);
-
-                let exp_sum: f64 = v_values.iter().map(|&(_, v)| (v - v_max).exp()).sum();
+                let exp_sum: f64 = v_buf[..num_modes].iter().map(|&v| (v - v_max).exp()).sum();
 
                 if exp_sum <= 0.0 {
                     continue;
                 }
 
-                for &(agent_type, v) in &v_values {
-                    let prob = (v - v_max).exp() / exp_sum;
-                    let demand = total_demand * prob;
-                    if let Some(od) = result.get_mut(&agent_type) {
-                        od.set(zone_ids[i], zone_ids[j], demand);
-                    }
+                for k in 0..num_modes {
+                    let prob = (v_buf[k] - v_max).exp() / exp_sum;
+                    result_matrices[k].set(oi, dj, total_demand * prob);
                 }
             }
+        }
+
+        // Build result HashMap from indexed Vec
+        let mut result: HashMap<AgentType, DenseOdMatrix> = HashMap::with_capacity(num_modes);
+        for (k, utility) in self.utilities.iter().enumerate() {
+            result.insert(
+                utility.agent_type,
+                std::mem::replace(&mut result_matrices[k], DenseOdMatrix::new(vec![])),
+            );
         }
 
         log_main!(

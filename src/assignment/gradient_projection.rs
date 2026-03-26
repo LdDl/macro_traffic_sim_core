@@ -47,7 +47,8 @@ use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
 use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction, compute_link_costs,
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
+    compute_link_costs, compute_link_costs_into,
     shortest_path::{build_path, dijkstra_one_to_all},
 };
 
@@ -123,24 +124,22 @@ impl GradientProjection {
 
     /// Compute link volumes by summing flow across all active paths.
     ///
-    /// Initializes all network links to zero, then accumulates flow
-    /// from every path in every OD pair's path set.
-    fn volumes_from_paths(
+    /// Reuses the provided HashMap to avoid reallocation.
+    fn volumes_from_paths_into(
         path_sets: &HashMap<(ZoneID, ZoneID), Vec<Path>>,
         network: &Network,
-    ) -> HashMap<LinkID, f64> {
-        let mut volumes: HashMap<LinkID, f64> = HashMap::new();
-        for &link_id in network.links.keys() {
-            volumes.insert(link_id, 0.0);
+        out: &mut HashMap<LinkID, f64>,
+    ) {
+        for (&link_id, _) in &network.links {
+            out.insert(link_id, 0.0);
         }
         for paths in path_sets.values() {
             for path in paths {
                 for &link_id in &path.links {
-                    *volumes.entry(link_id).or_insert(0.0) += path.flow;
+                    *out.entry(link_id).or_insert(0.0) += path.flow;
                 }
             }
         }
-        volumes
     }
 }
 
@@ -206,7 +205,8 @@ impl AssignmentMethod for GradientProjection {
             }
         }
 
-        let mut volumes = Self::volumes_from_paths(&path_sets, network);
+        let mut volumes: HashMap<LinkID, f64> = HashMap::with_capacity(network.links.len());
+        Self::volumes_from_paths_into(&path_sets, network, &mut volumes);
         let mut converged = false;
         let mut relative_gap = f64::MAX;
         let mut iteration = 0;
@@ -214,7 +214,7 @@ impl AssignmentMethod for GradientProjection {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            costs = compute_link_costs(network, &volumes, vdf);
+            compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
             // Update path costs
             for paths in path_sets.values_mut() {
@@ -299,7 +299,7 @@ impl AssignmentMethod for GradientProjection {
                 }
             }
 
-            volumes = Self::volumes_from_paths(&path_sets, network);
+            Self::volumes_from_paths_into(&path_sets, network, &mut volumes);
 
             if total_cost > 0.0 {
                 relative_gap = (total_cost - total_shortest_cost) / total_cost;
@@ -320,8 +320,8 @@ impl AssignmentMethod for GradientProjection {
             }
         }
 
-        // Final cost computation
-        costs = compute_link_costs(network, &volumes, vdf);
+        // Final cost computation (reuse allocation)
+        compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,

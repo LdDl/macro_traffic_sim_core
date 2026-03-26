@@ -48,8 +48,9 @@ use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
 use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction, beckmann_objective,
-    compute_link_costs, compute_relative_gap, shortest_path::all_or_nothing,
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
+    compute_link_costs, compute_link_costs_into, compute_relative_gap,
+    shortest_path::all_or_nothing,
 };
 
 /// Frank-Wolfe traffic assignment algorithm.
@@ -119,7 +120,8 @@ impl FrankWolfe {
 
     /// Evaluate the Beckmann objective at a given step size.
     ///
-    /// Computes volumes as `x + lambda * (y - x)` and returns `Z(volumes)`.
+    /// Computes volumes as `x + lambda * (y - x)` inline and sums
+    /// VDF integrals without materializing a combined HashMap.
     fn eval_at_step(
         network: &Network,
         current: &HashMap<LinkID, f64>,
@@ -127,12 +129,16 @@ impl FrankWolfe {
         vdf: &dyn VolumeDelayFunction,
         lambda: f64,
     ) -> f64 {
-        let mut combined = HashMap::new();
-        for (&link_id, &vol) in current {
-            let aux_vol = auxiliary.get(&link_id).copied().unwrap_or(0.0);
-            combined.insert(link_id, vol + lambda * (aux_vol - vol));
+        let mut objective = 0.0;
+        for (&link_id, link) in &network.links {
+            let cur = current.get(&link_id).copied().unwrap_or(0.0);
+            let aux = auxiliary.get(&link_id).copied().unwrap_or(0.0);
+            let vol = cur + lambda * (aux - cur);
+            let ff_time = link.get_free_flow_time_hours();
+            let capacity = link.get_total_capacity();
+            objective += vdf.integral(ff_time, vol, capacity);
         }
-        beckmann_objective(network, &combined, vdf)
+        objective
     }
 }
 
@@ -165,8 +171,8 @@ impl AssignmentMethod for FrankWolfe {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            // Update link costs with current volumes
-            costs = compute_link_costs(network, &volumes, vdf);
+            // Update link costs with current volumes (reuse allocation)
+            compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
             // All-or-nothing with current costs
             let aux_volumes = all_or_nothing(network, od_matrix, &costs)?;
@@ -195,8 +201,8 @@ impl AssignmentMethod for FrankWolfe {
             }
         }
 
-        // Final cost computation
-        costs = compute_link_costs(network, &volumes, vdf);
+        // Final cost computation (reuse allocation)
+        compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,

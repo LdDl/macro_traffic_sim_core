@@ -38,8 +38,9 @@ use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
 use super::{
-    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction, compute_link_costs,
-    compute_relative_gap, shortest_path::all_or_nothing,
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
+    compute_link_costs, compute_link_costs_into, compute_relative_gap,
+    shortest_path::all_or_nothing,
 };
 
 /// Method of Successive Averages traffic assignment.
@@ -93,8 +94,8 @@ impl AssignmentMethod for Msa {
         for iter in 0..config.max_iterations {
             iteration = iter + 1;
 
-            // Update link costs
-            costs = compute_link_costs(network, &volumes, vdf);
+            // Update link costs (reuse allocation)
+            compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
             // All-or-nothing with current costs
             let aux_volumes = all_or_nothing(network, od_matrix, &costs)?;
@@ -124,8 +125,8 @@ impl AssignmentMethod for Msa {
             }
         }
 
-        // Final cost computation
-        costs = compute_link_costs(network, &volumes, vdf);
+        // Final cost computation (reuse allocation)
+        compute_link_costs_into(network, &volumes, vdf, &mut costs);
 
         log_main!(
             EVENT_CONVERGENCE,

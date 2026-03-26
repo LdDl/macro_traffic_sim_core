@@ -174,35 +174,39 @@ pub fn run_four_step_model(
 
         // Step 3: Mode Choice
         let step_start = Instant::now();
-        let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::new();
+        let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
         let auto_distance = distance_skim(network, &zone_ids);
+        let zero_cost = DenseOdMatrix::new(zone_ids.clone());
+
+        // Compute time skims before moving auto_distance
+        let bike_time = speed_based_time_skim(&auto_distance, &zone_ids, 15.0);
+        let walk_time = speed_based_time_skim(&auto_distance, &zone_ids, 5.0);
 
         mode_skims.insert(
-            AgentType::Auto,
+            AgentType::Walk,
             ModeSkim {
-                time: auto_time,
+                time: walk_time,
                 distance: auto_distance.clone(),
-                cost: DenseOdMatrix::new(zone_ids.clone()),
+                cost: zero_cost.clone(),
             },
         );
 
         mode_skims.insert(
             AgentType::Bike,
             ModeSkim {
-                time: speed_based_time_skim(&auto_distance, &zone_ids, 15.0),
+                time: bike_time,
                 distance: auto_distance.clone(),
-                cost: DenseOdMatrix::new(zone_ids.clone()),
+                cost: zero_cost.clone(),
             },
         );
 
-        let walk_time = speed_based_time_skim(&auto_distance, &zone_ids, 5.0);
         mode_skims.insert(
-            AgentType::Walk,
+            AgentType::Auto,
             ModeSkim {
-                time: walk_time,
+                time: auto_time,
                 distance: auto_distance,
-                cost: DenseOdMatrix::new(zone_ids.clone()),
+                cost: zero_cost,
             },
         );
 

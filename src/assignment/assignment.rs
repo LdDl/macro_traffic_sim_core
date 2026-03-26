@@ -216,15 +216,29 @@ pub fn compute_link_costs(
     volumes: &HashMap<LinkID, f64>,
     vdf: &dyn VolumeDelayFunction,
 ) -> HashMap<LinkID, f64> {
-    let mut costs = HashMap::new();
+    let mut costs = HashMap::with_capacity(network.links.len());
+    compute_link_costs_into(network, volumes, vdf, &mut costs);
+    costs
+}
+
+/// Compute link costs into a pre-allocated HashMap, avoiding reallocation.
+///
+/// Same as [`compute_link_costs`] but reuses the provided map.
+/// Call this in hot loops to avoid allocating a new HashMap per iteration.
+pub fn compute_link_costs_into(
+    network: &Network,
+    volumes: &HashMap<LinkID, f64>,
+    vdf: &dyn VolumeDelayFunction,
+    out: &mut HashMap<LinkID, f64>,
+) {
+    out.clear();
     for (&link_id, link) in &network.links {
         let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
         let ff_time = link.get_free_flow_time_hours();
         let capacity = link.get_total_capacity();
         let cost = vdf.travel_time(ff_time, volume, capacity);
-        costs.insert(link_id, cost);
+        out.insert(link_id, cost);
     }
-    costs
 }
 
 /// Compute the Beckmann objective function value.
