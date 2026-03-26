@@ -28,5 +28,9 @@ path = "examples/simple_network/main.rs"
 name = "four_step"
 path = "examples/four_step/main.rs"
 
+[[example]]
+name = "grid_city"
+path = "examples/grid_city/main.rs"
+
 [dev-dependencies]
 csv = "1"
