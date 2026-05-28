@@ -152,6 +152,25 @@ pub fn run_four_step_model(
         elapsed_ms = format!("{:.3}", step_start.elapsed().as_secs_f64() * 1000.0)
     );
 
+    // Normalize attractions to match production total before Furness.
+    // Regression coefficients for productions and attractions are calibrated
+    // independently, so sum(P) != sum(A) is normal. Furness requires equal totals.
+    let sum_p: f64 = productions.iter().sum();
+    let sum_a: f64 = attractions.iter().sum();
+    let attractions: Vec<f64> = if (sum_p - sum_a).abs() > 1e-6 * sum_p.max(sum_a) {
+        let factor = sum_p / sum_a;
+        log_main!(
+            EVENT_PIPELINE,
+            "Normalizing attractions to match production total",
+            sum_productions = format!("{:.3}", sum_p),
+            sum_attractions = format!("{:.3}", sum_a),
+            normalization_factor = format!("{:.6}", factor)
+        );
+        attractions.iter().map(|a| a * factor).collect()
+    } else {
+        attractions
+    };
+
     // Build indexed graph once for skim computation
     let igraph = IndexedGraph::from_network(network);
     let mut skim_costs = vec![0.0; igraph.num_links];

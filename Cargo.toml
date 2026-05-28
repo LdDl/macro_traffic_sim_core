@@ -36,6 +36,10 @@ path = "examples/grid_city/main.rs"
 name = "disconnected_network"
 path = "examples/disconnected_network/main.rs"
 
+[[example]]
+name = "ring_network"
+path = "examples/ring_network/main.rs"
+
 [dev-dependencies]
 csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
