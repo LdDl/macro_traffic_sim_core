@@ -19,14 +19,14 @@ use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{AgentType, ZoneID};
-use crate::log_main;
+use crate::{log_main, log_additional};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
 use crate::trip_generation::TripGenerator;
-use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, set_verbose_level};
+use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, EVENT_PREFLIGHT, set_verbose_level};
 use crate::zone::Zone;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
@@ -362,7 +362,15 @@ fn preflight_check(
     // Case 5: zone centroids form multiple strongly-connected components.
     // Furness cannot distribute trips across component boundaries because the
     // off-diagonal friction values are exactly zero (no path exists).
+    let scc_start = std::time::Instant::now();
     let components = zone_scc(network, zones);
+    log_additional!(
+        EVENT_PREFLIGHT,
+        "Connectivity check complete",
+        zones = zones.len(),
+        components = components.len(),
+        elapsed_ms = format!("{:.3}", scc_start.elapsed().as_secs_f64() * 1000.0)
+    );
     if components.len() > 1 {
         return Err(
             PipelineError::InvalidInput(InvalidInputReason::DisconnectedComponents {

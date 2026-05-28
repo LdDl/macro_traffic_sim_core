@@ -1,4 +1,4 @@
-//! Example: disconnected network — demonstrates Furness failure.
+//! Example: disconnected network - demonstrates Furness failure.
 //!
 //! This example reproduces a real request sent to the macro pipeline
 //! that results in "Furness did not converge". The network has 4 nodes
@@ -97,7 +97,7 @@ fn build_network() -> Network {
         .unwrap();
     }
 
-    // Two one-way links — no cross-connection between the chains.
+    // Two one-way links - no cross-connection between the chains.
     // Chain 1: node 1 -> node 2 (node 2 has no outgoing links)
     // Chain 2: node 3 -> node 4 (node 4 has no outgoing links)
     net.add_link(

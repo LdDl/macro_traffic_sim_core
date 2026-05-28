@@ -86,7 +86,7 @@ pub enum InvalidInputReason {
     /// Furness (IPF) requires every zone to be able to exchange trips
     /// with every other zone. If the centroid graph splits into
     /// isolated groups, the within-component productions and attractions
-    /// must balance independently — a constraint the model cannot
+    /// must balance independently - a constraint the model cannot
     /// enforce automatically.
     ///
     /// `components` lists the zone IDs in each component, sorted by

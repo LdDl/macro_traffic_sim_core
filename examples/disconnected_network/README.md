@@ -1,4 +1,4 @@
-# Disconnected network — why it cannot work
+# Disconnected network - why it cannot work
 
 This example demonstrates that feeding a disconnected network into the
 4-step model is not a "configuration issue" but a **mathematical

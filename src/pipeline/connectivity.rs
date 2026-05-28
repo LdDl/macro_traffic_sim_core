@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::ZoneID;
+use crate::log_all;
+use crate::verbose::EVENT_PREFLIGHT;
 use crate::zone::Zone;
 
 /// Partition zone centroids into strongly-connected components.
@@ -39,7 +41,7 @@ pub fn zone_scc(network: &Network, zones: &[Zone]) -> Vec<Vec<ZoneID>> {
     // BFS from each centroid: collect which other centroid indices are reachable.
     let reachable: Vec<Vec<bool>> = centroids
         .iter()
-        .map(|(_, start)| {
+        .map(|(zone_id, start)| {
             let mut visited: HashSet<i64> = HashSet::new();
             let mut queue: VecDeque<i64> = VecDeque::new();
             queue.push_back(*start);
@@ -60,6 +62,14 @@ pub fn zone_scc(network: &Network, zones: &[Zone]) -> Vec<Vec<ZoneID>> {
                     }
                 }
             }
+            let reachable_count = reach.iter().filter(|&&r| r).count();
+            log_all!(
+                EVENT_PREFLIGHT,
+                "BFS from zone centroid",
+                zone_id = zone_id,
+                nodes_visited = visited.len(),
+                centroids_reachable = reachable_count
+            );
             reach
         })
         .collect();
