@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::connectivity::zone_scc;
 use super::error::{InvalidInputReason, PipelineError};
+use super::phase::{PipelinePhase, ProgressEvent};
 use crate::assignment::{
     AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
     gradient_projection::GradientProjection, msa::Msa,
@@ -106,10 +107,18 @@ pub fn run_four_step_model(
     impedance: &dyn ImpedanceFunction,
     logit_model: &MultinomialLogit,
     config: &ModelConfig,
+    on_progress: Option<&dyn Fn(ProgressEvent)>,
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
 
+    let notify = |event: ProgressEvent| {
+        if let Some(cb) = on_progress {
+            cb(event);
+        }
+    };
+
     // Catch bad inputs before any computation.
+    notify(ProgressEvent::single(PipelinePhase::Preflight));
     preflight_check(network, zones, trip_generator)?;
 
     let pipeline_start = Instant::now();
@@ -130,6 +139,7 @@ pub fn run_four_step_model(
     let mut t_assignment = Duration::ZERO;
 
     // Step 1: Trip Generation
+    notify(ProgressEvent::single(PipelinePhase::Generation));
     let step_start = Instant::now();
     let (productions, attractions) = trip_generator.generate(zones)?;
     t_generation = step_start.elapsed();
@@ -172,6 +182,7 @@ pub fn run_four_step_model(
         );
 
         // Step 2: Trip Distribution
+        notify(ProgressEvent::feedback(PipelinePhase::Distribution, feedback_done, max_feedback));
         let step_start = Instant::now();
         total_od = gravity.distribute(&productions, &attractions, &skim, impedance, &zone_ids)?;
         t_distribution += step_start.elapsed();
@@ -184,6 +195,7 @@ pub fn run_four_step_model(
         );
 
         // Step 3: Mode Choice
+        notify(ProgressEvent::feedback(PipelinePhase::ModeChoice, feedback_done, max_feedback));
         let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
@@ -233,6 +245,7 @@ pub fn run_four_step_model(
             PipelineError::MissingResult("no AUTO OD matrix from mode choice".to_string())
         })?;
 
+        notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
         let step_start = Instant::now();
         assignment_result = run_assignment(network, &igraph, auto_od, &config)?;
         t_assignment += step_start.elapsed();

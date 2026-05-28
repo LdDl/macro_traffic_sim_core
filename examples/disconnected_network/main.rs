@@ -48,7 +48,7 @@ fn main() {
     println!("nodes: {}, links: {}, zones: {}",
         network.node_count(), network.link_count(), zones.len());
 
-    match run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config) {
+    match run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None) {
         Ok(result) => {
             println!("pipeline succeeded (unexpected)");
             println!("  feedback iterations done: {}", result.feedback_iterations_done);
