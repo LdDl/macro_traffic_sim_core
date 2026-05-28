@@ -67,7 +67,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-macro_traffic_sim_core = "0.1.0"
+macro_traffic_sim_core = "0.1.1"
 ```
 
 Minimal usage:
