@@ -1,6 +1,6 @@
 [package]
 name = "macro_traffic_sim_core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Core library for macroscopic traffic simulation using the classical 4-step demand model."
 license = "Apache-2.0"
