@@ -219,9 +219,8 @@ impl IndexedGraph {
         volumes.fill(0.0);
         let zone_ids = od_matrix.zone_ids();
 
-        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
-            .map(|&z| self.zone_node_idx(z))
-            .collect();
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
 
         let mut dist = vec![f64::INFINITY; self.num_nodes];
         let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];
@@ -275,12 +274,7 @@ impl IndexedGraph {
     }
 
     /// Compute relative gap.
-    pub fn relative_gap(
-        &self,
-        volumes: &[f64],
-        costs: &[f64],
-        aux_volumes: &[f64],
-    ) -> f64 {
+    pub fn relative_gap(&self, volumes: &[f64], costs: &[f64], aux_volumes: &[f64]) -> f64 {
         let mut numerator = 0.0;
         let mut denominator = 0.0;
         for i in 0..self.num_links {
@@ -315,9 +309,8 @@ impl IndexedGraph {
     ) -> crate::od::dense::DenseOdMatrix {
         let mut skim = crate::od::dense::DenseOdMatrix::new(zone_ids.to_vec());
 
-        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
-            .map(|&z| self.zone_node_idx(z))
-            .collect();
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
 
         let mut dist = vec![f64::INFINITY; self.num_nodes];
         let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];

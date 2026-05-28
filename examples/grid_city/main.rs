@@ -59,16 +59,9 @@ enum LinkKind {
         total_capacity: f64,
     },
     /// Connection link (turn) at an intersection: (from_neighbor, via_intersection, to_neighbor)
-    Turn {
-        from: i64,
-        via: i64,
-        to: i64,
-    },
+    Turn { from: i64, via: i64, to: i64 },
     /// Centroid connector: (centroid, intersection)
-    Connector {
-        from: i64,
-        to: i64,
-    },
+    Connector { from: i64, to: i64 },
 }
 
 fn main() {
@@ -162,12 +155,7 @@ fn main() {
             total_capacity,
         } = kind
         {
-            let cost = result
-                .assignment
-                .link_costs
-                .get(id)
-                .copied()
-                .unwrap_or(0.0);
+            let cost = result.assignment.link_costs.get(id).copied().unwrap_or(0.0);
             let vc = if *total_capacity > 0.0 {
                 vol / total_capacity
             } else {
@@ -370,18 +358,18 @@ fn build_network() -> (Network, HashMap<i64, LinkKind>) {
 
         // Create approach sub-nodes
         for &from in &incoming {
-            net.add_node(Node::new(in_sub(n, from)).with_coordinates(lat, lon).build())
-                .unwrap();
-        }
-
-        // Create departure sub-nodes
-        for &to in &outgoing {
             net.add_node(
-                Node::new(out_sub(n, to))
+                Node::new(in_sub(n, from))
                     .with_coordinates(lat, lon)
                     .build(),
             )
             .unwrap();
+        }
+
+        // Create departure sub-nodes
+        for &to in &outgoing {
+            net.add_node(Node::new(out_sub(n, to)).with_coordinates(lat, lon).build())
+                .unwrap();
         }
 
         // Connection links: approach -> departure for each allowed turn
@@ -402,14 +390,7 @@ fn build_network() -> (Network, HashMap<i64, LinkKind>) {
                         .build(),
                 )
                 .unwrap();
-                info.insert(
-                    link_id,
-                    LinkKind::Turn {
-                        from,
-                        via: n,
-                        to,
-                    },
-                );
+                info.insert(link_id, LinkKind::Turn { from, via: n, to });
                 link_id += 1;
             }
         }
@@ -457,8 +438,7 @@ fn build_network() -> (Network, HashMap<i64, LinkKind>) {
         )
         .unwrap();
 
-        let is_connector =
-            !intersections.contains(&from) || !intersections.contains(&to);
+        let is_connector = !intersections.contains(&from) || !intersections.contains(&to);
         if is_connector {
             info.insert(link_id, LinkKind::Connector { from, to });
         } else {

@@ -128,12 +128,7 @@ fn main() {
         .collect();
     volumes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     for (id, vol) in volumes.iter().take(10) {
-        let cost = result
-            .assignment
-            .link_costs
-            .get(id)
-            .copied()
-            .unwrap_or(0.0);
+        let cost = result.assignment.link_costs.get(id).copied().unwrap_or(0.0);
         info!(
             event = "link_volume",
             link_id = id,
@@ -177,12 +172,7 @@ fn build_network() -> Network {
 
     // Road segment links (bidirectional pairs)
     // Diamond edges: 1-2, 1-3, 2-4, 3-4
-    let edges = [
-        (1, 2),
-        (1, 3),
-        (2, 4),
-        (3, 4),
-    ];
+    let edges = [(1, 2), (1, 3), (2, 4), (3, 4)];
 
     let mut link_id: i64 = 100;
     let mut road_links: HashMap<(i64, i64), i64> = HashMap::new();

@@ -342,9 +342,7 @@ mod tests {
             RegressionCoefficients::default(),
         );
 
-        let zones = vec![
-            Zone::new(1).with_population(100.0).build(),
-        ];
+        let zones = vec![Zone::new(1).with_population(100.0).build()];
         let (prods, _) = trip_gen.generate(&zones).unwrap();
 
         // -1000 + 0.1*100 = -990 -> clamped to 0

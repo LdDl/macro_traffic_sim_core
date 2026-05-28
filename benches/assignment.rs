@@ -216,16 +216,16 @@ fn grid_network() -> Network {
             .collect();
 
         for &from in &incoming {
-            net.add_node(Node::new(in_sub(n, from)).with_coordinates(lat, lon).build())
-                .unwrap();
-        }
-        for &to in &outgoing {
             net.add_node(
-                Node::new(out_sub(n, to))
+                Node::new(in_sub(n, from))
                     .with_coordinates(lat, lon)
                     .build(),
             )
             .unwrap();
+        }
+        for &to in &outgoing {
+            net.add_node(Node::new(out_sub(n, to)).with_coordinates(lat, lon).build())
+                .unwrap();
         }
 
         for &from in &incoming {
@@ -342,8 +342,7 @@ fn bench_simple_network(c: &mut Criterion) {
 
     c.bench_function("simple_network_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config)
-                .unwrap()
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config).unwrap()
         });
     });
 }
@@ -364,8 +363,7 @@ fn bench_grid_city(c: &mut Criterion) {
 
     c.bench_function("grid_city_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config)
-                .unwrap()
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config).unwrap()
         });
     });
 }
