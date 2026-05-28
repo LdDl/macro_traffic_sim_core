@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use super::connectivity::zone_scc;
 use super::error::{InvalidInputReason, PipelineError};
 use crate::assignment::{
     AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
@@ -356,6 +357,19 @@ fn preflight_check(
             total_hh,
         })
         .into());
+    }
+
+    // Case 5: zone centroids form multiple strongly-connected components.
+    // Furness cannot distribute trips across component boundaries because the
+    // off-diagonal friction values are exactly zero (no path exists).
+    let components = zone_scc(network, zones);
+    if components.len() > 1 {
+        return Err(
+            PipelineError::InvalidInput(InvalidInputReason::DisconnectedComponents {
+                components,
+            })
+            .into(),
+        );
     }
 
     Ok(())

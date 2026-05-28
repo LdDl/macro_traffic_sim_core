@@ -58,6 +58,7 @@
 //!   non-motorized modes (BIKE at 15 km/h, WALK at 5 km/h).
 
 pub mod error;
+mod connectivity;
 mod pipeline;
 
 pub use self::pipeline::*;

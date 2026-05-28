@@ -24,6 +24,7 @@ use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
 use macro_traffic_sim_core::gmns::types::AgentType;
 use macro_traffic_sim_core::mode_choice::{ModeUtility, MultinomialLogit};
+use macro_traffic_sim_core::pipeline::error::{InvalidInputReason, PipelineError};
 use macro_traffic_sim_core::pipeline::run_four_step_model;
 use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 use macro_traffic_sim_core::trip_generation::{RegressionCoefficients, RegressionGenerator};
@@ -57,20 +58,18 @@ fn main() {
         Err(e) => {
             println!("pipeline failed (expected):");
             println!("  {}", e);
-            match &e {
-                SimError::TripDistribution(_) => {
-                    println!();
-                    println!("cause: zones 2 and 3 have no outgoing links from their centroid");
-                    println!("nodes. their rows in the OD friction matrix are all zero,");
-                    println!("so Furness cannot satisfy the production constraints.");
-                    println!();
-                    println!("fix: ensure every zone centroid has at least one outgoing");
-                    println!("path to every other zone (connected network).");
+            if let SimError::Pipeline(PipelineError::InvalidInput(
+                InvalidInputReason::DisconnectedComponents { components },
+            )) = &e
+            {
+                println!();
+                println!("detected {} isolated zone groups:", components.len());
+                for (i, comp) in components.iter().enumerate() {
+                    println!("  component {}: zones {:?}", i + 1, comp);
                 }
-                SimError::Pipeline(_) => {
-                    println!("cause: invalid input — check zone centroids and zone attributes.");
-                }
-                _ => {}
+                println!();
+                println!("fix: add bidirectional links so every zone centroid can reach");
+                println!("every other zone centroid. see simple_network for a working example.");
             }
         }
     }
