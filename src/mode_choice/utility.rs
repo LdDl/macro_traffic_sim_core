@@ -199,9 +199,7 @@ mod tests {
 
     #[test]
     fn compute_zero_attributes_returns_asc() {
-        let u = ModeUtility::new(AgentType::Walk)
-            .with_asc(-2.0)
-            .build();
+        let u = ModeUtility::new(AgentType::Walk).with_asc(-2.0).build();
         assert_eq!(u.compute(0.0, 0.0, 0.0), -2.0);
     }
 

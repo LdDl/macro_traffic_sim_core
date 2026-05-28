@@ -108,6 +108,9 @@ pub fn run_four_step_model(
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
 
+    // Catch bad inputs before any computation.
+    preflight_check(network, zones, trip_generator)?;
+
     let pipeline_start = Instant::now();
 
     log_main!(
@@ -247,7 +250,11 @@ pub fn run_four_step_model(
             // Convert assignment link_costs HashMap to indexed Vec
             for i in 0..igraph.num_links {
                 let lid = igraph.link_id(i);
-                skim_costs[i] = assignment_result.link_costs.get(&lid).copied().unwrap_or(0.0);
+                skim_costs[i] = assignment_result
+                    .link_costs
+                    .get(&lid)
+                    .copied()
+                    .unwrap_or(0.0);
             }
             skim = igraph.compute_skim(&skim_costs, &zone_ids);
         }
@@ -282,6 +289,71 @@ pub fn run_four_step_model(
     unreachable!()
 }
 
+/// Validate inputs before any computation starts.
+///
+/// Checks possible failure cases that would cause e.g. "furness did not converge"
+/// or other errors.
+fn preflight_check(
+    network: &Network,
+    zones: &[Zone],
+    trip_generator: &dyn TripGenerator,
+) -> Result<(), SimError> {
+    // Case 1: no zones at all.
+    if zones.is_empty() {
+        return Err(PipelineError::InvalidInput(
+            "no zones provided: at least one zone is required".to_string(),
+        )
+        .into());
+    }
+
+    // Case 2: no zone centroid nodes in the network.
+    let centroid_count = zones
+        .iter()
+        .filter(|z| network.get_zone_centroid(z.id).is_ok())
+        .count();
+    if centroid_count == 0 {
+        return Err(PipelineError::InvalidInput(format!(
+            "no zone centroids found in network: {} zones provided but none have a corresponding centroid node (zone_id on a network node)",
+            zones.len()
+        ))
+        .into());
+    }
+
+    // Case 3: all zone socioeconomic attributes are zero.
+    let any_nonzero_attr = zones
+        .iter()
+        .any(|z| z.population > 0.0 || z.employment > 0.0 || z.households > 0.0);
+    if !any_nonzero_attr {
+        return Err(PipelineError::InvalidInput(
+            "all zones have zero population, employment, and households: trip generation will produce zero demand".to_string(),
+        )
+        .into());
+    }
+
+    // Case 4: trip generator produces all-zero productions or attractions.
+    // Run a trial generation to catch zero-coefficient configurations before
+    // entering the feedback loop.
+    let (productions, attractions) = trip_generator.generate(zones).map_err(SimError::from)?;
+    let total_p: f64 = productions.iter().sum();
+    let total_a: f64 = attractions.iter().sum();
+    if total_p <= 0.0 {
+        return Err(PipelineError::InvalidInput(
+            "trip generation produced zero total productions: check trip generation coefficients"
+                .to_string(),
+        )
+        .into());
+    }
+    if total_a <= 0.0 {
+        return Err(PipelineError::InvalidInput(
+            "trip generation produced zero total attractions: check trip generation coefficients"
+                .to_string(),
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
 /// Run traffic assignment with the configured method.
 ///
 /// Dispatches to the appropriate algorithm based on
@@ -296,15 +368,33 @@ fn run_assignment(
     match config.assignment_method {
         AssignmentMethodType::FrankWolfe => {
             let method = FrankWolfe::new();
-            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(
+                network,
+                graph,
+                od_matrix,
+                &config.bpr,
+                &config.assignment_config,
+            )
         }
         AssignmentMethodType::Msa => {
             let method = Msa::new();
-            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(
+                network,
+                graph,
+                od_matrix,
+                &config.bpr,
+                &config.assignment_config,
+            )
         }
         AssignmentMethodType::GradientProjection => {
             let method = GradientProjection::with_step_scale(config.gp_step_scale);
-            method.assign(network, graph, od_matrix, &config.bpr, &config.assignment_config)
+            method.assign(
+                network,
+                graph,
+                od_matrix,
+                &config.bpr,
+                &config.assignment_config,
+            )
         }
     }
 }
@@ -349,7 +439,11 @@ fn distance_skim(network: &Network, zone_ids: &[ZoneID]) -> DenseOdMatrix {
                 Err(_) => continue,
             };
 
-            result.set_by_index(i, j, haversine_km(o.latitude, o.longitude, d.latitude, d.longitude));
+            result.set_by_index(
+                i,
+                j,
+                haversine_km(o.latitude, o.longitude, d.latitude, d.longitude),
+            );
         }
     }
 

@@ -265,11 +265,7 @@ mod tests {
 
     #[test]
     fn furness_3x3_balanced() {
-        let mut matrix = vec![
-            10.0, 20.0, 30.0,
-            15.0, 25.0, 35.0,
-            20.0, 10.0, 40.0,
-        ];
+        let mut matrix = vec![10.0, 20.0, 30.0, 15.0, 25.0, 35.0, 20.0, 10.0, 40.0];
         let productions = [100.0, 150.0, 50.0];
         let attractions = [80.0, 120.0, 100.0];
         let config = FurnessConfig {

@@ -88,7 +88,6 @@ impl FrankWolfe {
         auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
     ) -> f64 {
-
         let mut a = 0.0_f64;
         let mut b = 1.0_f64;
 

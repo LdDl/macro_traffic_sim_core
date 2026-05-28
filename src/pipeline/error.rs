@@ -32,12 +32,21 @@ use std::fmt;
 /// let err = PipelineError::InvalidConfig("feedback_iterations must be > 0".to_string());
 /// assert_eq!(err.to_string(), "invalid config: feedback_iterations must be > 0");
 /// ```
+///
+/// ```
+/// use macro_traffic_sim_core::pipeline::error::PipelineError;
+///
+/// let err = PipelineError::InvalidInput("no zones provided".to_string());
+/// assert_eq!(err.to_string(), "invalid input: no zones provided");
+/// ```
 #[derive(Debug, Clone)]
 pub enum PipelineError {
     /// Missing result from a pipeline step.
     MissingResult(String),
     /// Invalid pipeline configuration.
     InvalidConfig(String),
+    /// Invalid input data (zones, network, coefficients).
+    InvalidInput(String),
 }
 
 impl fmt::Display for PipelineError {
@@ -48,6 +57,9 @@ impl fmt::Display for PipelineError {
             }
             PipelineError::InvalidConfig(msg) => {
                 write!(f, "invalid config: {}", msg)
+            }
+            PipelineError::InvalidInput(msg) => {
+                write!(f, "invalid input: {}", msg)
             }
         }
     }

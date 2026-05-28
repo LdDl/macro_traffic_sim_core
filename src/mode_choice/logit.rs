@@ -229,9 +229,10 @@ impl MultinomialLogit {
             match skims.get(&utility.agent_type) {
                 Some(skim) => skim_refs.push(skim),
                 None => {
-                    return Err(ModeChoiceError::MissingSkim(
-                        format!("{:?}", utility.agent_type),
-                    ));
+                    return Err(ModeChoiceError::MissingSkim(format!(
+                        "{:?}",
+                        utility.agent_type
+                    )));
                 }
             }
         }

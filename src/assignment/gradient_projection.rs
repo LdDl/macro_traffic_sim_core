@@ -37,8 +37,8 @@
 //!   Smaller values are more conservative but may converge slower.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
@@ -77,11 +77,7 @@ fn path_cost_indexed(link_indices: &[usize], costs: &[f64]) -> f64 {
 }
 
 /// Build path as link indices by walking predecessors from dest to origin.
-fn build_path_indexed(
-    pred: &[Option<usize>],
-    graph: &IndexedGraph,
-    dest_idx: usize,
-) -> Vec<usize> {
+fn build_path_indexed(pred: &[Option<usize>], graph: &IndexedGraph, dest_idx: usize) -> Vec<usize> {
     let mut path = Vec::new();
     let mut current = dest_idx;
     loop {
@@ -163,9 +159,8 @@ impl AssignmentMethod for GradientProjection {
         let zone_ids = od_matrix.zone_ids().to_vec();
         let n = graph.num_links;
 
-        let zone_node_idxs: Vec<Option<usize>> = zone_ids.iter()
-            .map(|&z| graph.zone_node_idx(z))
-            .collect();
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| graph.zone_node_idx(z)).collect();
 
         let mut costs = vec![0.0; n];
         let mut volumes = vec![0.0; n];
@@ -188,7 +183,13 @@ impl AssignmentMethod for GradientProjection {
                 None => continue,
             };
 
-            graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred, &mut dij_visited);
+            graph.dijkstra_into(
+                origin_idx,
+                &costs,
+                &mut dij_dist,
+                &mut dij_pred,
+                &mut dij_visited,
+            );
 
             for (di, &dest_zone) in zone_ids.iter().enumerate() {
                 if oi == di {
@@ -256,7 +257,13 @@ impl AssignmentMethod for GradientProjection {
                     None => continue,
                 };
 
-                graph.dijkstra_into(origin_idx, &costs, &mut dij_dist, &mut dij_pred, &mut dij_visited);
+                graph.dijkstra_into(
+                    origin_idx,
+                    &costs,
+                    &mut dij_dist,
+                    &mut dij_pred,
+                    &mut dij_visited,
+                );
 
                 for (di, &dest_zone) in zone_ids.iter().enumerate() {
                     if oi == di {
