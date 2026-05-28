@@ -38,6 +38,18 @@ use crate::gmns::types::ZoneID;
 /// assert!(msg.contains("3 zones provided"));
 /// assert!(msg.contains("[1, 2, 3]"));
 /// ```
+///
+/// ```
+/// use macro_traffic_sim_core::pipeline::error::InvalidInputReason;
+///
+/// let reason = InvalidInputReason::DisconnectedComponents {
+///     components: vec![vec![1, 2], vec![3, 4]],
+/// };
+/// let msg = reason.to_string();
+/// assert!(msg.contains("2 disconnected"));
+/// assert!(msg.contains("[1, 2]"));
+/// assert!(msg.contains("[3, 4]"));
+/// ```
 #[derive(Debug, Clone)]
 pub enum InvalidInputReason {
     /// No zones were provided at all.
@@ -69,6 +81,17 @@ pub enum InvalidInputReason {
         total_emp: f64,
         total_hh: f64,
     },
+    /// Zone centroids form multiple strongly-connected components.
+    ///
+    /// Furness (IPF) requires every zone to be able to exchange trips
+    /// with every other zone. If the centroid graph splits into
+    /// isolated groups, the within-component productions and attractions
+    /// must balance independently - a constraint the model cannot
+    /// enforce automatically.
+    ///
+    /// `components` lists the zone IDs in each component, sorted by
+    /// the smallest zone ID in each group.
+    DisconnectedComponents { components: Vec<Vec<ZoneID>> },
 }
 
 impl fmt::Display for InvalidInputReason {
@@ -120,6 +143,20 @@ impl fmt::Display for InvalidInputReason {
                      check attraction coefficients \
                      (total_pop={:.1}, total_emp={:.1}, total_hh={:.1})",
                     total_pop, total_emp, total_hh
+                )
+            }
+            InvalidInputReason::DisconnectedComponents { components } => {
+                let parts: Vec<String> = components
+                    .iter()
+                    .map(|c| format!("{:?}", c))
+                    .collect();
+                write!(
+                    f,
+                    "{} disconnected zone components detected: Furness requires every zone \
+                     to exchange trips with every other zone; each component must be \
+                     modeled separately; components: [{}]",
+                    components.len(),
+                    parts.join(", ")
                 )
             }
         }

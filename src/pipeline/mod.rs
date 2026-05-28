@@ -58,6 +58,9 @@
 //!   non-motorized modes (BIKE at 15 km/h, WALK at 5 km/h).
 
 pub mod error;
+pub mod phase;
+mod connectivity;
 mod pipeline;
 
+pub use self::phase::{PipelinePhase, ProgressEvent};
 pub use self::pipeline::*;

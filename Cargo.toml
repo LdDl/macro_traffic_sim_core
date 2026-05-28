@@ -1,6 +1,6 @@
 [package]
 name = "macro_traffic_sim_core"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Core library for macroscopic traffic simulation using the classical 4-step demand model."
 license = "Apache-2.0"
@@ -31,6 +31,10 @@ path = "examples/four_step/main.rs"
 [[example]]
 name = "grid_city"
 path = "examples/grid_city/main.rs"
+
+[[example]]
+name = "disconnected_network"
+path = "examples/disconnected_network/main.rs"
 
 [dev-dependencies]
 csv = "1"

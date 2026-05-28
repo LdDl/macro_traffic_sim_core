@@ -41,6 +41,7 @@ use macro_traffic_sim_core::gmns::meso::node::Node;
 use macro_traffic_sim_core::gmns::types::AgentType;
 use macro_traffic_sim_core::mode_choice::MultinomialLogit;
 use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::pipeline::phase::ProgressEvent;
 use macro_traffic_sim_core::pipeline::{haversine_km, run_four_step_model};
 use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 use macro_traffic_sim_core::trip_generation::RegressionGenerator;
@@ -88,7 +89,25 @@ fn main() {
         .with_verbose_level(VerboseLevel::Main)
         .build();
 
-    let result = run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config)
+    let on_progress = |event: ProgressEvent| {
+        if event.feedback_total > 0 {
+            info!(
+                event = "pipeline_phase",
+                phase = %event.phase,
+                feedback_iter = event.feedback_iter,
+                feedback_total = event.feedback_total,
+                "Phase started",
+            );
+        } else {
+            info!(
+                event = "pipeline_phase",
+                phase = %event.phase,
+                "Phase started",
+            );
+        }
+    };
+
+    let result = run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, Some(&on_progress))
         .expect("pipeline failed");
 
     for (i, zone) in zones.iter().enumerate() {

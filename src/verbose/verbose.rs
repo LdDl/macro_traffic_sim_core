@@ -65,6 +65,7 @@ impl From<VerboseLevel> for String {
 }
 
 pub const EVENT_PIPELINE: &str = "pipeline";
+pub const EVENT_PREFLIGHT: &str = "preflight";
 pub const EVENT_NETWORK_LOAD: &str = "network_load";
 pub const EVENT_TRIP_GENERATION: &str = "trip_generation";
 pub const EVENT_TRIP_DISTRIBUTION: &str = "trip_distribution";

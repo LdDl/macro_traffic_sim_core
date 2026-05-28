@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use super::connectivity::zone_scc;
 use super::error::{InvalidInputReason, PipelineError};
+use super::phase::{PipelinePhase, ProgressEvent};
 use crate::assignment::{
     AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
     gradient_projection::GradientProjection, msa::Msa,
@@ -18,14 +20,14 @@ use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{AgentType, ZoneID};
-use crate::log_main;
+use crate::{log_main, log_additional};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
 use crate::trip_generation::TripGenerator;
-use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, set_verbose_level};
+use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, EVENT_PREFLIGHT, set_verbose_level};
 use crate::zone::Zone;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
@@ -105,10 +107,18 @@ pub fn run_four_step_model(
     impedance: &dyn ImpedanceFunction,
     logit_model: &MultinomialLogit,
     config: &ModelConfig,
+    on_progress: Option<&dyn Fn(ProgressEvent)>,
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
 
+    let notify = |event: ProgressEvent| {
+        if let Some(cb) = on_progress {
+            cb(event);
+        }
+    };
+
     // Catch bad inputs before any computation.
+    notify(ProgressEvent::single(PipelinePhase::Preflight));
     preflight_check(network, zones, trip_generator)?;
 
     let pipeline_start = Instant::now();
@@ -129,6 +139,7 @@ pub fn run_four_step_model(
     let mut t_assignment = Duration::ZERO;
 
     // Step 1: Trip Generation
+    notify(ProgressEvent::single(PipelinePhase::Generation));
     let step_start = Instant::now();
     let (productions, attractions) = trip_generator.generate(zones)?;
     t_generation = step_start.elapsed();
@@ -171,6 +182,7 @@ pub fn run_four_step_model(
         );
 
         // Step 2: Trip Distribution
+        notify(ProgressEvent::feedback(PipelinePhase::Distribution, feedback_done, max_feedback));
         let step_start = Instant::now();
         total_od = gravity.distribute(&productions, &attractions, &skim, impedance, &zone_ids)?;
         t_distribution += step_start.elapsed();
@@ -183,6 +195,7 @@ pub fn run_four_step_model(
         );
 
         // Step 3: Mode Choice
+        notify(ProgressEvent::feedback(PipelinePhase::ModeChoice, feedback_done, max_feedback));
         let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
@@ -232,6 +245,7 @@ pub fn run_four_step_model(
             PipelineError::MissingResult("no AUTO OD matrix from mode choice".to_string())
         })?;
 
+        notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
         let step_start = Instant::now();
         assignment_result = run_assignment(network, &igraph, auto_od, &config)?;
         t_assignment += step_start.elapsed();
@@ -356,6 +370,27 @@ fn preflight_check(
             total_hh,
         })
         .into());
+    }
+
+    // Case 5: zone centroids form multiple strongly-connected components.
+    // Furness cannot distribute trips across component boundaries because the
+    // off-diagonal friction values are exactly zero (no path exists).
+    let scc_start = std::time::Instant::now();
+    let components = zone_scc(network, zones);
+    log_additional!(
+        EVENT_PREFLIGHT,
+        "Connectivity check complete",
+        zones = zones.len(),
+        components = components.len(),
+        elapsed_ms = format!("{:.3}", scc_start.elapsed().as_secs_f64() * 1000.0)
+    );
+    if components.len() > 1 {
+        return Err(
+            PipelineError::InvalidInput(InvalidInputReason::DisconnectedComponents {
+                components,
+            })
+            .into(),
+        );
     }
 
     Ok(())
