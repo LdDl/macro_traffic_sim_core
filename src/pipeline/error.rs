@@ -8,8 +8,123 @@
 //!   is absent (e.g., mode choice did not produce an AUTO matrix).
 //! - [`PipelineError::InvalidConfig`] -- the pipeline configuration is
 //!   inconsistent (e.g., zero feedback iterations).
+//! - [`PipelineError::InvalidInput`] -- input data is unusable before
+//!   any computation starts (see [`InvalidInputReason`] for details).
 
 use std::fmt;
+
+use crate::gmns::types::ZoneID;
+
+/// Structured reason for [`PipelineError::InvalidInput`].
+///
+/// Each variant carries the data needed to produce a precise diagnostic
+/// message and allows callers to react programmatically (e.g., highlight
+/// zones that lack centroids in the UI).
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::pipeline::error::InvalidInputReason;
+///
+/// let reason = InvalidInputReason::NoZones;
+/// assert_eq!(reason.to_string(), "no zones provided: at least one zone is required");
+/// ```
+///
+/// ```
+/// use macro_traffic_sim_core::pipeline::error::InvalidInputReason;
+///
+/// let reason = InvalidInputReason::NoCentroids { zone_count: 3, missing_ids: vec![1, 2, 3] };
+/// let msg = reason.to_string();
+/// assert!(msg.contains("3 zones provided"));
+/// assert!(msg.contains("[1, 2, 3]"));
+/// ```
+#[derive(Debug, Clone)]
+pub enum InvalidInputReason {
+    /// No zones were provided at all.
+    NoZones,
+    /// Zones exist but none of them have a centroid node in the network.
+    ///
+    /// `zone_count` is the total number of zones; `missing_ids` lists
+    /// every zone ID that has no corresponding centroid node.
+    NoCentroids {
+        zone_count: usize,
+        missing_ids: Vec<ZoneID>,
+    },
+    /// All zones have zero population, employment, and households.
+    ///
+    /// `zone_ids` lists every zone ID with all-zero attributes.
+    ZeroAttributes { zone_ids: Vec<ZoneID> },
+    /// Trip generation produced zero total productions.
+    ///
+    /// Carries the aggregate zone attributes used by the generator so
+    /// the caller can tell which coefficients to check.
+    ZeroProductions {
+        total_pop: f64,
+        total_emp: f64,
+        total_hh: f64,
+    },
+    /// Trip generation produced zero total attractions.
+    ZeroAttractions {
+        total_pop: f64,
+        total_emp: f64,
+        total_hh: f64,
+    },
+}
+
+impl fmt::Display for InvalidInputReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidInputReason::NoZones => {
+                write!(f, "no zones provided: at least one zone is required")
+            }
+            InvalidInputReason::NoCentroids {
+                zone_count,
+                missing_ids,
+            } => {
+                write!(
+                    f,
+                    "no zone centroids found in network: {} zones provided but none have a \
+                     corresponding centroid node (zone_id on a network node); missing zone IDs: {:?}",
+                    zone_count, missing_ids
+                )
+            }
+            InvalidInputReason::ZeroAttributes { zone_ids } => {
+                write!(
+                    f,
+                    "all zones have zero population, employment, and households: \
+                     trip generation will produce zero demand; affected zone IDs: {:?}",
+                    zone_ids
+                )
+            }
+            InvalidInputReason::ZeroProductions {
+                total_pop,
+                total_emp,
+                total_hh,
+            } => {
+                write!(
+                    f,
+                    "trip generation produced zero total productions: \
+                     check production coefficients \
+                     (total_pop={:.1}, total_emp={:.1}, total_hh={:.1})",
+                    total_pop, total_emp, total_hh
+                )
+            }
+            InvalidInputReason::ZeroAttractions {
+                total_pop,
+                total_emp,
+                total_hh,
+            } => {
+                write!(
+                    f,
+                    "trip generation produced zero total attractions: \
+                     check attraction coefficients \
+                     (total_pop={:.1}, total_emp={:.1}, total_hh={:.1})",
+                    total_pop, total_emp, total_hh
+                )
+            }
+        }
+    }
+}
 
 /// Pipeline orchestration errors.
 ///
@@ -34,10 +149,11 @@ use std::fmt;
 /// ```
 ///
 /// ```
+/// use macro_traffic_sim_core::pipeline::error::InvalidInputReason;
 /// use macro_traffic_sim_core::pipeline::error::PipelineError;
 ///
-/// let err = PipelineError::InvalidInput("no zones provided".to_string());
-/// assert_eq!(err.to_string(), "invalid input: no zones provided");
+/// let err = PipelineError::InvalidInput(InvalidInputReason::NoZones);
+/// assert_eq!(err.to_string(), "invalid input: no zones provided: at least one zone is required");
 /// ```
 #[derive(Debug, Clone)]
 pub enum PipelineError {
@@ -46,7 +162,7 @@ pub enum PipelineError {
     /// Invalid pipeline configuration.
     InvalidConfig(String),
     /// Invalid input data (zones, network, coefficients).
-    InvalidInput(String),
+    InvalidInput(InvalidInputReason),
 }
 
 impl fmt::Display for PipelineError {
@@ -58,8 +174,8 @@ impl fmt::Display for PipelineError {
             PipelineError::InvalidConfig(msg) => {
                 write!(f, "invalid config: {}", msg)
             }
-            PipelineError::InvalidInput(msg) => {
-                write!(f, "invalid input: {}", msg)
+            PipelineError::InvalidInput(reason) => {
+                write!(f, "invalid input: {}", reason)
             }
         }
     }
