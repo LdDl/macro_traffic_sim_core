@@ -166,6 +166,206 @@ impl VolumeDelayFunction for BprFunction {
     }
 }
 
+/// Conical volume-delay function (Spiess, 1990).
+///
+/// `t(v) = t0 * (2 + sqrt(a^2*(1 - v/c)^2 + b^2) - a*(1 - v/c) - b)`
+///
+/// where `b = (2a - 1) / (2(a - 1))` ensures `t(0) = t0`.
+///
+/// At capacity (`v = c`), travel time is always `2 * t0` regardless of `a`.
+/// Requires `alpha > 1`.
+///
+/// Returns `f64::INFINITY` when capacity is zero or negative.
+///
+/// Ref: Spiess, H. (1990) "Conical Volume-Delay Functions",
+///      Transportation Science, 24(2), 153-158.
+///      DOI: 10.1287/trsc.24.2.153
+///      https://pubsonline.informs.org/doi/10.1287/trsc.24.2.153
+///      http://www.spiess.ch/emme2/conic/conic.html
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::{ConicalDelayFunction, VolumeDelayFunction};
+///
+/// let cdf = ConicalDelayFunction::default(); // alpha = 2
+///
+/// // Free-flow: 10 min, no volume
+/// assert!((cdf.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < 1e-10);
+///
+/// // At capacity: always 2 * t0
+/// assert!((cdf.travel_time(10.0, 1000.0, 1000.0) - 20.0).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct ConicalDelayFunction {
+    /// Alpha parameter (must be > 1). Controls steepness.
+    pub alpha: f64,
+    /// Beta parameter, derived as `(2*alpha - 1) / (2*(alpha - 1))`.
+    pub beta: f64,
+}
+
+impl ConicalDelayFunction {
+    /// Create a conical delay function with the given alpha.
+    ///
+    /// Beta is computed automatically to ensure `t(0) = t0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::assignment::ConicalDelayFunction;
+    ///
+    /// let cdf = ConicalDelayFunction::new(5.0);
+    /// assert_eq!(cdf.alpha, 5.0);
+    /// assert!((cdf.beta - 1.125).abs() < 1e-10);
+    /// ```
+    pub fn new(alpha: f64) -> Self {
+        let beta = (2.0 * alpha - 1.0) / (2.0 * (alpha - 1.0));
+        ConicalDelayFunction { alpha, beta }
+    }
+}
+
+impl Default for ConicalDelayFunction {
+    fn default() -> Self {
+        Self::new(2.0)
+    }
+}
+
+impl VolumeDelayFunction for ConicalDelayFunction {
+    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        let a = self.alpha;
+        let b = self.beta;
+        let r = 1.0 - volume / capacity;
+        free_flow_time * (2.0 + (a * a * r * r + b * b).sqrt() - a * r - b)
+    }
+
+    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        if volume <= 0.0 {
+            return 0.0;
+        }
+        let a = self.alpha;
+        let b = self.beta;
+        let c = capacity;
+
+        let g = |u: f64| -> f64 {
+            let s = (a * a * u * u + b * b).sqrt();
+            u * s / 2.0 + b * b / (2.0 * a) * (a * u + s).ln()
+        };
+
+        free_flow_time
+            * ((2.0 - a - b) * volume
+                + a * volume * volume / (2.0 * c)
+                + c * (g(1.0) - g(1.0 - volume / c)))
+    }
+}
+
+/// Akcelik volume-delay function for signalized intersections.
+///
+/// `t(v) = t0 + T/4 * ((v/c - 1) + sqrt((v/c - 1)^2 + 8*J*v / (c^2 * T)))`
+///
+/// where `T` is the analysis period (hours) and `J` is the delay parameter.
+/// Accounts for queuing at signalized intersections: delay grows
+/// roughly linearly above capacity, unlike BPR's polynomial growth.
+///
+/// When `J <= 0`, falls back to free-flow time (no signal delay).
+///
+/// Returns `f64::INFINITY` when capacity is zero or negative.
+///
+/// Ref: Akcelik, R. (1991) "Travel time functions for transport planning
+///      purposes: Davidson's function, its time dependent form and an
+///      alternative travel time function",
+///      Australian Road Research, 21(3), 49-59.
+///      https://www.researchgate.net/publication/242258239_Travel_time_functions_for_transport_planning_purposes_Davidson%27s_function_its_time-dependent_form_and_an_alternative_travel_time_function
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::assignment::{AkcelikDelayFunction, VolumeDelayFunction};
+///
+/// let akc = AkcelikDelayFunction::default(); // J=0.1, T=0.25h
+///
+/// // Free-flow: no volume
+/// assert!((akc.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < 1e-10);
+///
+/// // Over capacity: delay increases
+/// assert!(akc.travel_time(10.0, 1500.0, 1000.0) > akc.travel_time(10.0, 1000.0, 1000.0));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct AkcelikDelayFunction {
+    /// Delay parameter (must be > 0).
+    pub j: f64,
+    /// Analysis period in hours (typically 0.25 = 15 min).
+    pub t_period: f64,
+}
+
+impl AkcelikDelayFunction {
+    /// Create an Akcelik delay function with custom parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::assignment::AkcelikDelayFunction;
+    ///
+    /// let akc = AkcelikDelayFunction::new(0.5, 0.25);
+    /// assert_eq!(akc.j, 0.5);
+    /// assert_eq!(akc.t_period, 0.25);
+    /// ```
+    pub fn new(j: f64, t_period: f64) -> Self {
+        AkcelikDelayFunction { j, t_period }
+    }
+}
+
+impl Default for AkcelikDelayFunction {
+    fn default() -> Self {
+        Self::new(0.1, 0.25)
+    }
+}
+
+impl VolumeDelayFunction for AkcelikDelayFunction {
+    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        if self.j <= 0.0 {
+            return free_flow_time;
+        }
+        let z = volume / capacity;
+        let d = self.t_period;
+        let inner = (z - 1.0).powi(2) + 8.0 * self.j * z / (capacity * d);
+        free_flow_time + d / 4.0 * ((z - 1.0) + inner.sqrt())
+    }
+
+    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        if capacity <= 0.0 {
+            return f64::INFINITY;
+        }
+        if volume <= 0.0 {
+            return 0.0;
+        }
+        if self.j <= 0.0 {
+            return free_flow_time * volume;
+        }
+
+        let r = volume / capacity;
+        let d = self.t_period;
+        let k = 8.0 * self.j / (capacity * d);
+        let p = k - 2.0;
+
+        let h = |r: f64| -> f64 {
+            let s = (r * r + p * r + 1.0).sqrt();
+            let disc = 4.0 - p * p;
+            (2.0 * r + p) / 4.0 * s + disc / 8.0 * (2.0 * s + 2.0 * r + p).ln()
+        };
+
+        capacity * (free_flow_time * r + d / 4.0 * (r * r / 2.0 - r + h(r) - h(0.0)))
+    }
+}
+
 /// Configuration for traffic assignment algorithms.
 ///
 /// # Examples
@@ -480,5 +680,156 @@ mod tests {
         let aux = HashMap::from([(1, 100.0)]);
         let gap = compute_relative_gap(&volumes, &costs, &aux);
         assert_eq!(gap, 0.0);
+    }
+
+    #[test]
+    fn conical_zero_volume_returns_free_flow() {
+        let c = ConicalDelayFunction::default();
+        assert!((c.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < EPS);
+    }
+
+    #[test]
+    fn conical_at_capacity_doubles_time() {
+        for &alpha in &[2.0, 3.0, 5.0, 10.0] {
+            let c = ConicalDelayFunction::new(alpha);
+            assert!(
+                (c.travel_time(10.0, 1000.0, 1000.0) - 20.0).abs() < EPS,
+                "Failed for alpha={}",
+                alpha
+            );
+        }
+    }
+
+    #[test]
+    fn conical_over_capacity() {
+        let c = ConicalDelayFunction::default();
+        assert!(c.travel_time(10.0, 2000.0, 1000.0) > 20.0);
+    }
+
+    #[test]
+    fn conical_zero_capacity_returns_infinity() {
+        let c = ConicalDelayFunction::default();
+        assert_eq!(c.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn conical_integral_zero_volume() {
+        let c = ConicalDelayFunction::default();
+        assert_eq!(c.integral(10.0, 0.0, 1000.0), 0.0);
+    }
+
+    #[test]
+    fn conical_integral_zero_capacity_returns_infinity() {
+        let c = ConicalDelayFunction::default();
+        assert_eq!(c.integral(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn conical_integral_monotonic() {
+        let c = ConicalDelayFunction::default();
+        let i1 = c.integral(10.0, 500.0, 1000.0);
+        let i2 = c.integral(10.0, 1000.0, 1000.0);
+        let i3 = c.integral(10.0, 1500.0, 1000.0);
+        assert!(i1 < i2);
+        assert!(i2 < i3);
+    }
+
+    #[test]
+    fn conical_integral_derivative_matches_travel_time() {
+        let c = ConicalDelayFunction::default();
+        let h = 0.001;
+        for &vol in &[100.0, 500.0, 1000.0, 1500.0] {
+            let numerical = (c.integral(10.0, vol + h, 1000.0) - c.integral(10.0, vol, 1000.0)) / h;
+            let analytical = c.travel_time(10.0, vol, 1000.0);
+            assert!(
+                (numerical - analytical).abs() < 1e-4,
+                "vol={}: numerical={}, analytical={}",
+                vol,
+                numerical,
+                analytical
+            );
+        }
+    }
+
+    #[test]
+    fn akcelik_zero_volume_returns_free_flow() {
+        let a = AkcelikDelayFunction::default();
+        assert!((a.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < EPS);
+    }
+
+    #[test]
+    fn akcelik_at_capacity_adds_delay() {
+        let a = AkcelikDelayFunction::default();
+        let t = a.travel_time(10.0, 1000.0, 1000.0);
+        assert!(t > 10.0);
+    }
+
+    #[test]
+    fn akcelik_over_capacity_grows() {
+        let a = AkcelikDelayFunction::default();
+        let t1 = a.travel_time(10.0, 1000.0, 1000.0);
+        let t2 = a.travel_time(10.0, 1500.0, 1000.0);
+        let t3 = a.travel_time(10.0, 2000.0, 1000.0);
+        assert!(t1 < t2);
+        assert!(t2 < t3);
+    }
+
+    #[test]
+    fn akcelik_zero_capacity_returns_infinity() {
+        let a = AkcelikDelayFunction::default();
+        assert_eq!(a.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn akcelik_zero_j_returns_free_flow() {
+        let a = AkcelikDelayFunction::new(0.0, 0.25);
+        assert_eq!(a.travel_time(10.0, 500.0, 1000.0), 10.0);
+        assert_eq!(a.travel_time(10.0, 2000.0, 1000.0), 10.0);
+    }
+
+    #[test]
+    fn akcelik_integral_zero_volume() {
+        let a = AkcelikDelayFunction::default();
+        assert_eq!(a.integral(10.0, 0.0, 1000.0), 0.0);
+    }
+
+    #[test]
+    fn akcelik_integral_zero_capacity_returns_infinity() {
+        let a = AkcelikDelayFunction::default();
+        assert_eq!(a.integral(10.0, 100.0, 0.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn akcelik_integral_monotonic() {
+        let a = AkcelikDelayFunction::default();
+        let i1 = a.integral(10.0, 500.0, 1000.0);
+        let i2 = a.integral(10.0, 1000.0, 1000.0);
+        let i3 = a.integral(10.0, 1500.0, 1000.0);
+        assert!(i1 < i2);
+        assert!(i2 < i3);
+    }
+
+    #[test]
+    fn akcelik_integral_derivative_matches_travel_time() {
+        let a = AkcelikDelayFunction::default();
+        let h = 0.001;
+        for &vol in &[100.0, 500.0, 1000.0, 1500.0] {
+            let numerical = (a.integral(10.0, vol + h, 1000.0) - a.integral(10.0, vol, 1000.0)) / h;
+            let analytical = a.travel_time(10.0, vol, 1000.0);
+            assert!(
+                (numerical - analytical).abs() < 1e-4,
+                "vol={}: numerical={}, analytical={}",
+                vol,
+                numerical,
+                analytical
+            );
+        }
+    }
+
+    #[test]
+    fn akcelik_integral_zero_j() {
+        let a = AkcelikDelayFunction::new(0.0, 0.25);
+        let i = a.integral(10.0, 500.0, 1000.0);
+        assert!((i - 10.0 * 500.0).abs() < EPS);
     }
 }
