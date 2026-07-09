@@ -27,6 +27,7 @@
 //! | [`ExponentialImpedance`] | `exp(-beta * c)` | Travel time as cost |
 //! | [`PowerImpedance`] | `c^(-alpha)` | Distance as cost |
 //! | [`CombinedImpedance`] | `c^(-alpha) * exp(-beta * c)` | Flexible calibration |
+//! | [`GeneralizedPowerImpedance`] | `(1 + (c/c0)^alpha)^(-beta)` | Burr XII / EVA-style models |
 //!
 //! ## Components
 //!

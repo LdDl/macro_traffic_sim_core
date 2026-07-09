@@ -217,11 +217,82 @@ impl ImpedanceFunction for CombinedImpedance {
     }
 }
 
+/// Generalized power impedance function: `f(c) = (1 + (c / c0)^alpha)^(-beta)`.
+///
+/// Corresponds to the survival function of the Burr Type XII distribution.
+/// See the [Burr distribution](https://en.wikipedia.org/wiki/Burr_distribution) for details.
+/// When `beta = 1`, reduces to the log-logistic deterrence function.
+/// Widely used in European transport planning (PTV VISUM EVA model,
+/// Lohse EVA approach). Handles the zero-cost case gracefully
+/// (`f(0) = 1`), unlike the plain power function.
+///
+/// Originates from the EVA (Erzeugung - 'generation'; Verteilung - 'distribution';
+/// Aufteilung - 'mode choice') model (Lohse, 1997, TU Dresden).
+/// For general context see: Ortuzar, J.D. & Willumsen, L.G. (2011).
+/// "Modelling Transport", 4th ed., Wiley, Ch. 5.
+/// DOI: 10.1002/9781119993308
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::trip_distribution::{GeneralizedPowerImpedance, ImpedanceFunction};
+///
+/// let f = GeneralizedPowerImpedance::new(30.0, 3.0, 2.0);
+///
+/// // f(0) = (1 + 0)^(-2) = 1.0
+/// assert_eq!(f.compute(0.0), 1.0);
+///
+/// // f(30) = (1 + 1^3)^(-2) = 2^(-2) = 0.25
+/// assert!((f.compute(30.0) - 0.25).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct GeneralizedPowerImpedance {
+    /// Scale parameter (characteristic cost). Must be positive.
+    pub c0: f64,
+    /// Shape parameter (steepness). Must be positive.
+    pub alpha: f64,
+    /// Decay exponent. Must be positive.
+    pub beta: f64,
+}
+
+impl GeneralizedPowerImpedance {
+    /// Create a new log-logistic impedance function.
+    ///
+    /// # Arguments
+    /// * `c0` - Scale parameter (positive). Cost at which the function equals `2^(-beta)`.
+    /// * `alpha` - Shape parameter (positive). Controls steepness of the transition.
+    /// * `beta` - Decay exponent (positive). Controls how fast the tail drops.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::trip_distribution::GeneralizedPowerImpedance;
+    ///
+    /// let f = GeneralizedPowerImpedance::new(20.0, 2.5, 1.5);
+    /// assert_eq!(f.c0, 20.0);
+    /// assert_eq!(f.alpha, 2.5);
+    /// assert_eq!(f.beta, 1.5);
+    /// ```
+    pub fn new(c0: f64, alpha: f64, beta: f64) -> Self {
+        GeneralizedPowerImpedance { c0, alpha, beta }
+    }
+}
+
+impl ImpedanceFunction for GeneralizedPowerImpedance {
+    fn compute(&self, cost: f64) -> f64 {
+        if cost <= 0.0 {
+            return 1.0;
+        }
+        (1.0 + (cost / self.c0).powf(self.alpha)).powf(-self.beta)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const EPS: f64 = 1e-10;
+    const EPS_COARSE: f64 = 1e-6;
 
     #[test]
     fn exponential_zero_cost() {
@@ -319,5 +390,47 @@ mod tests {
         let v3 = f.compute(5.0);
         assert!(v1 > v2);
         assert!(v2 > v3);
+    }
+
+    #[test]
+    fn log_logistic_zero_cost() {
+        let f = GeneralizedPowerImpedance::new(30.0, 3.0, 2.0);
+        assert_eq!(f.compute(0.0), 1.0);
+    }
+
+    #[test]
+    fn log_logistic_negative_cost() {
+        let f = GeneralizedPowerImpedance::new(30.0, 3.0, 2.0);
+        assert_eq!(f.compute(-5.0), 1.0);
+    }
+
+    #[test]
+    fn log_logistic_at_c0() {
+        let f = GeneralizedPowerImpedance::new(30.0, 3.0, 2.0);
+        // f(c0) = (1 + 1^3)^(-2) = 2^(-2) = 0.25
+        assert!((f.compute(30.0) - 0.25).abs() < EPS);
+    }
+
+    #[test]
+    fn log_logistic_known_value() {
+        let f = GeneralizedPowerImpedance::new(10.0, 2.0, 1.0);
+        // f(20) = (1 + (20/10)^2)^(-1) = (1 + 4)^(-1) = 0.2
+        assert!((f.compute(20.0) - 0.2).abs() < EPS);
+    }
+
+    #[test]
+    fn log_logistic_monotonically_decreasing() {
+        let f = GeneralizedPowerImpedance::new(15.0, 2.0, 1.5);
+        let v1 = f.compute(1.0);
+        let v2 = f.compute(10.0);
+        let v3 = f.compute(50.0);
+        assert!(v1 > v2);
+        assert!(v2 > v3);
+    }
+
+    #[test]
+    fn log_logistic_large_cost_near_zero() {
+        let f = GeneralizedPowerImpedance::new(10.0, 2.0, 2.0);
+        assert!(f.compute(1000.0) < EPS_COARSE);
     }
 }

@@ -342,7 +342,7 @@ fn bench_simple_network(c: &mut Criterion) {
 
     c.bench_function("simple_network_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config).unwrap()
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None).unwrap()
         });
     });
 }
@@ -363,7 +363,7 @@ fn bench_grid_city(c: &mut Criterion) {
 
     c.bench_function("grid_city_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config).unwrap()
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None).unwrap()
         });
     });
 }
