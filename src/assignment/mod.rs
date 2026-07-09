@@ -14,21 +14,23 @@
 //!
 //! All three implement [`AssignmentMethod`], so they are interchangeable.
 //!
-//! ## Volume-delay function
+//! ## Volume-delay functions
 //!
-//! The BPR function models congestion:
+//! | VDF | Formula | Use case |
+//! |---|---|---|
+//! | [`BprFunction`] | `t0 * (1 + a*(x/c)^b)` | General-purpose (default) |
+//! | [`ConicalDelayFunction`] | `t0 * (2 + sqrt(a^2*(1-x/c)^2 + b^2) - ...)` | Smoother near capacity |
+//! | [`AkcelikDelayFunction`] | `t0 + T/4 * ((x/c-1) + sqrt(...))` | Signalized intersections |
 //!
-//! ```text
-//! t(x) = t0 * (1 + alpha * (x / c) ^ beta)
-//! ```
-//!
-//! Default parameters: `alpha = 0.15`, `beta = 4.0`.
+//! All three implement [`VolumeDelayFunction`] and are interchangeable.
 //!
 //! ## Components
 //!
 //! - [`AssignmentMethod`] - Trait for assignment algorithms
 //! - [`VolumeDelayFunction`] - Trait for volume-delay functions
-//! - [`BprFunction`] - BPR implementation
+//! - [`BprFunction`] - BPR volume-delay function
+//! - [`ConicalDelayFunction`] - Conical VDF (Spiess, 1990)
+//! - [`AkcelikDelayFunction`] - Akcelik VDF (Akcelik, 1991)
 //! - [`AssignmentConfig`] - Iteration/convergence settings
 //! - [`AssignmentResult`] - Output volumes, costs, convergence info
 //! - [`shortest_path`] - Dijkstra, all-or-nothing, skim computation
