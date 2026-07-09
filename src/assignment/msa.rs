@@ -87,6 +87,9 @@ impl AssignmentMethod for Msa {
         graph.compute_costs(&volumes, vdf, &mut costs);
 
         // Initial all-or-nothing assignment
+        #[cfg(feature = "parallel")]
+        graph.all_or_nothing_parallel(od_matrix, &costs, &mut volumes);
+        #[cfg(not(feature = "parallel"))]
         graph.all_or_nothing(od_matrix, &costs, &mut volumes);
 
         let mut converged = false;
@@ -100,6 +103,9 @@ impl AssignmentMethod for Msa {
             graph.compute_costs(&volumes, vdf, &mut costs);
 
             // All-or-nothing with current costs
+            #[cfg(feature = "parallel")]
+            graph.all_or_nothing_parallel(od_matrix, &costs, &mut aux_volumes);
+            #[cfg(not(feature = "parallel"))]
             graph.all_or_nothing(od_matrix, &costs, &mut aux_volumes);
 
             relative_gap = graph.relative_gap(&volumes, &costs, &aux_volumes);

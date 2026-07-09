@@ -271,6 +271,7 @@ dependencies = [
  "criterion",
  "csv",
  "ordered-float",
+ "rayon",
  "tracing",
  "tracing-subscriber",
 ]

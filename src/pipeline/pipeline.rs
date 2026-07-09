@@ -175,6 +175,9 @@ pub fn run_four_step_model(
     let igraph = IndexedGraph::from_network(network);
     let mut skim_costs = vec![0.0; igraph.num_links];
     igraph.compute_costs(&vec![0.0; igraph.num_links], &config.bpr, &mut skim_costs);
+    #[cfg(feature = "parallel")]
+    let mut skim = igraph.compute_skim_parallel(&skim_costs, &zone_ids);
+    #[cfg(not(feature = "parallel"))]
     let mut skim = igraph.compute_skim(&skim_costs, &zone_ids);
 
     let gravity = GravityModel::with_furness_config(config.furness_config.clone());
@@ -289,7 +292,14 @@ pub fn run_four_step_model(
                     .copied()
                     .unwrap_or(0.0);
             }
-            skim = igraph.compute_skim(&skim_costs, &zone_ids);
+            #[cfg(feature = "parallel")]
+            {
+                skim = igraph.compute_skim_parallel(&skim_costs, &zone_ids);
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                skim = igraph.compute_skim(&skim_costs, &zone_ids);
+            }
         }
 
         // If this is the last iteration, return results
