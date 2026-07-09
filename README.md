@@ -184,6 +184,17 @@ macro_traffic_sim_core
   zone                  - transport analysis zones
 ```
 
+## Parallel execution
+
+The `parallel` feature is ENABLED by default. It uses [rayon](https://docs.rs/rayon) to parallelize the most expensive steps: all-or-nothing assignment (Dijkstra per origin zone) and skim matrix computation.
+
+To disable and use single-threaded execution:
+
+```toml
+[dependencies]
+macro_traffic_sim_core = { version = "...", default-features = false }
+```
+
 ## Key design decisions
 
 - **Meso graph only.** The library operates on the mesoscopic graph where

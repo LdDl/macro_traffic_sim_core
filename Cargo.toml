@@ -12,7 +12,7 @@ keywords = ["traffic", "simulation", "transportation", "assignment", "demand"]
 categories = ["simulation", "science"]
 
 [features]
-default = []
+default = ["parallel"]
 parallel = ["rayon"]
 
 [dependencies]
