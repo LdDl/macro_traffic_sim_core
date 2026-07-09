@@ -20,7 +20,7 @@ use crate::gmns::types::ZoneID;
 /// assert_eq!(od.get(10, 20), 42.0);
 /// assert_eq!(od.zone_count(), 2);
 /// ```
-pub trait OdMatrix {
+pub trait OdMatrix: Send + Sync {
     /// Returns the demand for a given OD pair.
     ///
     /// Returns `0.0` if the zone IDs are not part of the matrix.

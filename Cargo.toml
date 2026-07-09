@@ -11,8 +11,13 @@ homepage = "https://github.com/LdDl/macro_traffic_sim_core"
 keywords = ["traffic", "simulation", "transportation", "assignment", "demand"]
 categories = ["simulation", "science"]
 
+[features]
+default = []
+parallel = ["rayon"]
+
 [dependencies]
 ordered-float = "4"
+rayon = { version = "1", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "registry"] }
 

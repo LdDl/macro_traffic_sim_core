@@ -12,6 +12,9 @@ use std::collections::{BinaryHeap, HashMap};
 
 use ordered_float::OrderedFloat;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{LinkID, NodeID, ZoneID};
 
@@ -261,6 +264,77 @@ impl IndexedGraph {
         }
     }
 
+    /// Parallel all-or-nothing assignment.
+    /// Uses rayon fold+reduce: each worker thread reuses one volume
+    /// buffer across multiple origin zones (O(num_threads * E) memory
+    /// instead of O(Z * E)), then buffers are merged via pairwise
+    /// summation in the reduce tree.
+    #[cfg(feature = "parallel")]
+    pub fn all_or_nothing_parallel(
+        &self,
+        od_matrix: &dyn crate::od::OdMatrix,
+        link_costs: &[f64],
+        volumes: &mut [f64],
+    ) {
+        let zone_ids = od_matrix.zone_ids();
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+        let n = self.num_links;
+
+        let merged = (0..zone_ids.len())
+            .into_par_iter()
+            .fold(
+                || vec![0.0; n],
+                |mut acc, oi| {
+                    let origin_zone = zone_ids[oi];
+                    let origin_idx = match zone_node_idxs[oi] {
+                        Some(i) => i,
+                        None => return acc,
+                    };
+
+                    let (dist, pred) = self.dijkstra(origin_idx, link_costs);
+                    let _ = dist;
+
+                    for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                        if oi == di {
+                            continue;
+                        }
+                        let demand = od_matrix.get(origin_zone, dest_zone);
+                        if demand <= 0.0 {
+                            continue;
+                        }
+                        let dest_idx = match zone_node_idxs[di] {
+                            Some(i) => i,
+                            None => continue,
+                        };
+
+                        let mut current = dest_idx;
+                        loop {
+                            match pred[current] {
+                                Some(li) => {
+                                    acc[li] += demand;
+                                    current = self.link_source_idx[li];
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![0.0; n],
+                |mut a, b| {
+                    for i in 0..n {
+                        a[i] += b[i];
+                    }
+                    a
+                },
+            );
+
+        volumes.copy_from_slice(&merged);
+    }
+
     /// Compute link costs from volumes using the VDF.
     pub fn compute_costs(
         &self,
@@ -339,6 +413,49 @@ impl IndexedGraph {
             }
         }
 
+        skim
+    }
+
+    /// Parallel skim matrix computation.
+    /// Each origin zone runs Dijkstra independently, returns a row of
+    /// distances. Rows are merged into the skim matrix after collection.
+    #[cfg(feature = "parallel")]
+    pub fn compute_skim_parallel(
+        &self,
+        link_costs: &[f64],
+        zone_ids: &[ZoneID],
+    ) -> crate::od::dense::DenseOdMatrix {
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+
+        let rows: Vec<(usize, Vec<(usize, f64)>)> = (0..zone_ids.len())
+            .into_par_iter()
+            .filter_map(|i| {
+                let origin_idx = zone_node_idxs[i]?;
+                let (dist, _) = self.dijkstra(origin_idx, link_costs);
+
+                let mut row = Vec::new();
+                for j in 0..zone_ids.len() {
+                    if i == j {
+                        continue;
+                    }
+                    if let Some(dest_idx) = zone_node_idxs[j] {
+                        let d = dist[dest_idx];
+                        if d.is_finite() {
+                            row.push((j, d));
+                        }
+                    }
+                }
+                Some((i, row))
+            })
+            .collect();
+
+        let mut skim = crate::od::dense::DenseOdMatrix::new(zone_ids.to_vec());
+        for (i, row) in rows {
+            for (j, d) in row {
+                skim.set_by_index(i, j, d);
+            }
+        }
         skim
     }
 }
