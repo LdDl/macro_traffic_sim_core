@@ -19,7 +19,7 @@ use crate::assignment::{
 use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::{AgentType, ZoneID};
+use crate::gmns::types::{AgentType, LinkID, ZoneID};
 use crate::{log_main, log_additional};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
@@ -67,8 +67,12 @@ pub struct PipelineResult {
     pub mode_od: HashMap<AgentType, DenseOdMatrix>,
     /// Traffic assignment result (AUTO mode only).
     /// Contains link volumes, link costs, iteration count, and
-    /// convergence status.
+    /// convergence status. This is the result of the LAST feedback
+    /// iteration.
     pub assignment: AssignmentResult,
+    /// Assignment result per feedback iteration (index 0 = first iteration).
+    /// Useful for comparing convergence with/without warm start.
+    pub per_feedback_assignments: Vec<AssignmentResult>,
     /// Number of feedback iterations actually performed.
     pub feedback_iterations_done: usize,
     /// Per-step timing breakdown.
@@ -189,6 +193,8 @@ pub fn run_four_step_model(
     let mut total_od;
     let mut mode_od;
     let mut assignment_result;
+    let mut prev_volumes: Option<HashMap<LinkID, f64>> = None;
+    let mut per_feedback_assignments: Vec<AssignmentResult> = Vec::new();
 
     let max_feedback = config.feedback_iterations.max(1);
     let mut feedback_done;
@@ -269,7 +275,16 @@ pub fn run_four_step_model(
 
         notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
         let step_start = Instant::now();
-        assignment_result = run_assignment(network, &igraph, auto_od, &config)?;
+        let warm_vols = if config.warm_start { prev_volumes.as_ref() } else { None };
+        assignment_result = run_assignment(
+            network,
+            &igraph,
+            auto_od,
+            &config,
+            warm_vols,
+        )?;
+        prev_volumes = Some(assignment_result.link_volumes.clone());
+        per_feedback_assignments.push(assignment_result.clone());
         t_assignment += step_start.elapsed();
 
         log_main!(
@@ -317,6 +332,7 @@ pub fn run_four_step_model(
                 total_od,
                 mode_od,
                 assignment: assignment_result,
+                per_feedback_assignments,
                 feedback_iterations_done: feedback_done,
                 timings: PipelineTimings {
                     generation: t_generation,
@@ -430,11 +446,16 @@ fn preflight_check(
 /// Dispatches to the appropriate algorithm based on
 /// [`AssignmentMethodType`](crate::config::AssignmentMethodType)
 /// in the model config.
+///
+/// When `initial_volumes` is `Some`, the algorithm skips the cold-start
+/// AON initialization and uses the given link volumes as starting point
+/// (warm start). Pass `None` for the first feedback iteration.
 fn run_assignment(
     network: &Network,
     graph: &IndexedGraph,
     od_matrix: &dyn OdMatrix,
     config: &ModelConfig,
+    initial_volumes: Option<&HashMap<LinkID, f64>>,
 ) -> Result<AssignmentResult, crate::assignment::error::AssignmentError> {
     match config.assignment_method {
         AssignmentMethodType::FrankWolfe => {
@@ -445,6 +466,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
         AssignmentMethodType::Msa => {
@@ -455,6 +477,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
         AssignmentMethodType::GradientProjection => {
@@ -465,6 +488,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
     }
