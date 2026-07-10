@@ -75,6 +75,7 @@ pub mod frank_wolfe;
 pub mod gradient_projection;
 pub mod indexed_graph;
 pub mod msa;
+pub mod multiclass;
 pub mod shortest_path;
 
 pub use self::assignment::*;
