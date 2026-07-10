@@ -408,9 +408,11 @@ impl Default for AssignmentConfig {
 /// Result of a traffic assignment.
 ///
 /// Contains link-level volumes and costs, plus convergence information.
+/// For multi-class assignment, `class_volumes` holds per-class link
+/// volumes and `link_volumes` holds the PCU-total.
 #[derive(Debug, Clone)]
 pub struct AssignmentResult {
-    /// Volume on each link.
+    /// Volume on each link (PCU-total for multi-class).
     pub link_volumes: HashMap<LinkID, f64>,
     /// Travel time on each link.
     pub link_costs: HashMap<LinkID, f64>,
@@ -420,6 +422,10 @@ pub struct AssignmentResult {
     pub relative_gap: f64,
     /// Whether the algorithm converged within the gap threshold.
     pub converged: bool,
+    /// Per-class link volumes (in vehicle units, not PCU).
+    /// `None` for single-class assignment.
+    /// Key is the class name from [`multiclass::UserClass`].
+    pub class_volumes: Option<HashMap<String, HashMap<LinkID, f64>>>,
 }
 
 /// Trait for traffic assignment methods.
