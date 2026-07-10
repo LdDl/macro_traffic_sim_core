@@ -17,10 +17,11 @@
 //! and MSA converge to the multi-class User Equilibrium. The simplest
 //! valid configuration is ff_time_multiplier = pcu for every class.
 //!
-//! Note: when ff_time_multiplier = pcu, the per-class cost is
-//! c_a^m = pcu_m * t_a(V_a). Since pcu_m is a constant multiplier
-//! applied equally to all links, it does not change shortest paths.
-//! Classes then differ only in PCU weight and OD patterns, not routing.
+//! Note: under any valid ratio k, the per-class cost is
+//! c_a^m = k * pcu_m * t_a(V_a). Since k * pcu_m is a constant
+//! multiplier applied equally to all links for a given class, it does
+//! not change shortest paths. All classes route identically -- they
+//! differ only in PCU weight and OD patterns, not routing.
 //!
 //! An alternative formulation uses class-specific VDFs (each class has its
 //! own volume-delay function). That turns the problem into a variational
@@ -321,6 +322,12 @@ fn validate_inputs(
             return Err(AssignmentError::InvalidConfig(format!(
                 "class '{}': pcu must be positive, got {}",
                 c.name, c.pcu
+            )));
+        }
+        if c.ff_time_multiplier <= 0.0 {
+            return Err(AssignmentError::InvalidConfig(format!(
+                "class '{}': ff_time_multiplier must be positive, got {}",
+                c.name, c.ff_time_multiplier
             )));
         }
     }
