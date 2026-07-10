@@ -39,9 +39,39 @@
 //! assert_eq!(config.feedback_iterations, 5);
 //! ```
 
+use crate::assignment::multiclass::UserClass;
 use crate::assignment::{AssignmentConfig, BprFunction};
 use crate::trip_distribution::furness::FurnessConfig;
 use crate::verbose::VerboseLevel;
+
+/// Multi-class user definition for the pipeline.
+///
+/// When provided in [`ModelConfig::user_classes`], the AUTO OD matrix
+/// is split by `demand_fraction` and multi-class assignment is used.
+#[derive(Debug, Clone)]
+pub struct UserClassConfig {
+    pub name: String,
+    pub pcu: f64,
+    pub ff_time_multiplier: f64,
+    /// Fraction of total AUTO demand assigned to this class.
+    /// All fractions should sum to 1.0.
+    pub demand_fraction: f64,
+}
+
+impl UserClassConfig {
+    pub fn new(name: &str, pcu: f64, ff_time_multiplier: f64, demand_fraction: f64) -> Self {
+        UserClassConfig {
+            name: name.to_string(),
+            pcu,
+            ff_time_multiplier,
+            demand_fraction,
+        }
+    }
+
+    pub fn to_user_class(&self) -> UserClass {
+        UserClass::new(&self.name, self.pcu, self.ff_time_multiplier)
+    }
+}
 
 /// Assignment method selection.
 ///
@@ -111,6 +141,11 @@ pub struct ModelConfig {
     /// iteration are passed as the initial solution, skipping the
     /// cold-start AON initialization. Default: true.
     pub warm_start: bool,
+    /// Multi-class user definitions. When `Some`, the pipeline splits
+    /// the AUTO OD by each class's `demand_fraction` and runs
+    /// multi-class PCU-based assignment (Dafermos 1972, Case 1).
+    /// When `None`, single-class assignment is used.
+    pub user_classes: Option<Vec<UserClassConfig>>,
 }
 
 impl Default for ModelConfig {
@@ -124,6 +159,7 @@ impl Default for ModelConfig {
             verbose_level: VerboseLevel::None,
             gp_step_scale: 0.1,
             warm_start: true,
+            user_classes: None,
         }
     }
 }
@@ -211,6 +247,12 @@ impl ModelConfigBuilder {
     /// Enable or disable warm start for the 2nd feedback iteration onwards.
     pub fn with_warm_start(mut self, enabled: bool) -> Self {
         self.instance.warm_start = enabled;
+        self
+    }
+
+    /// Set multi-class user definitions for PCU-based assignment.
+    pub fn with_user_classes(mut self, classes: Vec<UserClassConfig>) -> Self {
+        self.instance.user_classes = Some(classes);
         self
     }
 
