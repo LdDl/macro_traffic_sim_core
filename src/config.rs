@@ -106,6 +106,11 @@ pub struct ModelConfig {
     pub verbose_level: VerboseLevel,
     /// Gradient projection step scale (only used with GP method).
     pub gp_step_scale: f64,
+    /// Use warm start for assignment from the 2nd feedback iteration
+    /// onwards. When true, link volumes from the previous feedback
+    /// iteration are passed as the initial solution, skipping the
+    /// cold-start AON initialization. Default: true.
+    pub warm_start: bool,
 }
 
 impl Default for ModelConfig {
@@ -118,6 +123,7 @@ impl Default for ModelConfig {
             feedback_iterations: 3,
             verbose_level: VerboseLevel::None,
             gp_step_scale: 0.1,
+            warm_start: true,
         }
     }
 }
@@ -199,6 +205,12 @@ impl ModelConfigBuilder {
     /// Set the gradient projection step scale.
     pub fn with_gp_step_scale(mut self, scale: f64) -> Self {
         self.instance.gp_step_scale = scale;
+        self
+    }
+
+    /// Enable or disable warm start for the 2nd feedback iteration onwards.
+    pub fn with_warm_start(mut self, enabled: bool) -> Self {
+        self.instance.warm_start = enabled;
         self
     }
 

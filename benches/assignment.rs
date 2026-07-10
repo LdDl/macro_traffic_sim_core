@@ -476,5 +476,53 @@ fn bench_large_grid(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_simple_network, bench_grid_city, bench_large_grid);
+fn bench_warm_start(c: &mut Criterion) {
+    let (network, zones) = generated_grid(30, 2);
+    let trip_gen = RegressionGenerator::new();
+    let impedance = ExponentialImpedance::new(0.3);
+    let logit = MultinomialLogit::default_auto_bike_walk();
+
+    println!(
+        "warm_start bench: {} zones, {} nodes, {} links",
+        zones.len(),
+        network.nodes.len(),
+        network.links.len()
+    );
+
+    let config_warm = ModelConfig::new()
+        .with_assignment_method(AssignmentMethodType::FrankWolfe)
+        .with_max_iterations(50)
+        .with_convergence_gap(1e-4)
+        .with_feedback_iterations(3)
+        .with_warm_start(true)
+        .with_verbose_level(VerboseLevel::None)
+        .build();
+
+    let config_cold = ModelConfig::new()
+        .with_assignment_method(AssignmentMethodType::FrankWolfe)
+        .with_max_iterations(50)
+        .with_convergence_gap(1e-4)
+        .with_feedback_iterations(3)
+        .with_warm_start(false)
+        .with_verbose_level(VerboseLevel::None)
+        .build();
+
+    let mut group = c.benchmark_group("warm_start");
+
+    group.bench_function("cold", |b| {
+        b.iter(|| {
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config_cold, None).unwrap()
+        });
+    });
+
+    group.bench_function("warm", |b| {
+        b.iter(|| {
+            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config_warm, None).unwrap()
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_simple_network, bench_grid_city, bench_large_grid, bench_warm_start);
 criterion_main!(benches);

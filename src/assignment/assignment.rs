@@ -450,6 +450,7 @@ pub struct AssignmentResult {
 /// 3) Levin, M.W. and Boyles, S.D. (2015) Transportmetrica B, 3(2), 99-113.
 /// DOI: 10.1080/21680566.2014.937788
 /// => warm-starting DTA with STA solutions.
+/// @todo: I'll consider DTA in future works
 pub trait AssignmentMethod {
     /// Perform traffic assignment.
     ///
