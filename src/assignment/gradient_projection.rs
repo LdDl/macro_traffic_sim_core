@@ -43,7 +43,7 @@ use std::hash::{Hash, Hasher};
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::ZoneID;
+use crate::gmns::types::{LinkID, ZoneID};
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
@@ -153,6 +153,7 @@ impl AssignmentMethod for GradientProjection {
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
+        _initial_volumes: Option<&HashMap<LinkID, f64>>,
     ) -> Result<AssignmentResult, AssignmentError> {
         log_main!(EVENT_ASSIGNMENT, "Starting Gradient Projection assignment",);
 

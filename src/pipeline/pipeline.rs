@@ -19,7 +19,7 @@ use crate::assignment::{
 use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::{AgentType, ZoneID};
+use crate::gmns::types::{AgentType, LinkID, ZoneID};
 use crate::{log_main, log_additional};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
@@ -189,6 +189,7 @@ pub fn run_four_step_model(
     let mut total_od;
     let mut mode_od;
     let mut assignment_result;
+    let mut prev_volumes: Option<HashMap<LinkID, f64>> = None;
 
     let max_feedback = config.feedback_iterations.max(1);
     let mut feedback_done;
@@ -269,7 +270,14 @@ pub fn run_four_step_model(
 
         notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
         let step_start = Instant::now();
-        assignment_result = run_assignment(network, &igraph, auto_od, &config)?;
+        assignment_result = run_assignment(
+            network,
+            &igraph,
+            auto_od,
+            &config,
+            prev_volumes.as_ref(),
+        )?;
+        prev_volumes = Some(assignment_result.link_volumes.clone());
         t_assignment += step_start.elapsed();
 
         log_main!(
@@ -430,11 +438,16 @@ fn preflight_check(
 /// Dispatches to the appropriate algorithm based on
 /// [`AssignmentMethodType`](crate::config::AssignmentMethodType)
 /// in the model config.
+///
+/// When `initial_volumes` is `Some`, the algorithm skips the cold-start
+/// AON initialization and uses the given link volumes as starting point
+/// (warm start). Pass `None` for the first feedback iteration.
 fn run_assignment(
     network: &Network,
     graph: &IndexedGraph,
     od_matrix: &dyn OdMatrix,
     config: &ModelConfig,
+    initial_volumes: Option<&HashMap<LinkID, f64>>,
 ) -> Result<AssignmentResult, crate::assignment::error::AssignmentError> {
     match config.assignment_method {
         AssignmentMethodType::FrankWolfe => {
@@ -445,6 +458,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
         AssignmentMethodType::Msa => {
@@ -455,6 +469,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
         AssignmentMethodType::GradientProjection => {
@@ -465,6 +480,7 @@ fn run_assignment(
                 od_matrix,
                 &config.bpr,
                 &config.assignment_config,
+                initial_volumes,
             )
         }
     }

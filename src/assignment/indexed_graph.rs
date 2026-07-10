@@ -375,6 +375,20 @@ impl IndexedGraph {
         self.volumes_to_hashmap(costs)
     }
 
+    /// Convert HashMap<LinkID, f64> to a flat Vec indexed by link index.
+    ///
+    /// Missing links default to 0.0. Used to import warm-start volumes
+    /// from a previous [`AssignmentResult`](super::AssignmentResult).
+    pub fn hashmap_to_vec(&self, map: &HashMap<LinkID, f64>) -> Vec<f64> {
+        let mut out = vec![0.0; self.num_links];
+        for (&link_id, &val) in map {
+            if let Some(&idx) = self.link_to_idx.get(&link_id) {
+                out[idx] = val;
+            }
+        }
+        out
+    }
+
     /// Compute skim matrix from shortest path distances.
     pub fn compute_skim(
         &self,

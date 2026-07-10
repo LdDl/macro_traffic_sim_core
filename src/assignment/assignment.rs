@@ -432,6 +432,24 @@ pub struct AssignmentResult {
 /// - [`FrankWolfe`](super::FrankWolfe) - convex combinations with bisection line search
 /// - [`Msa`](super::Msa) - fixed step size 1/n
 /// - [`GradientProjection`](super::GradientProjection) - path-based with gradient flow shifting
+///
+/// ## Warm start
+///
+/// Pass `initial_volumes` from a previous [`AssignmentResult`] to skip
+/// the cold-start all-or-nothing (AON) initialization (Step 0). The algorithm
+/// starts from the supplied link volumes and computes costs from them,
+/// typically converging in fewer iterations when the OD matrix has
+/// changed only slightly (e.g. across feedback iterations).
+///
+/// Ref:
+/// 1) Sheffi, Y. (1985) "Urban Transportation Networks", Ch.5 s5.2 p.119-120
+/// => standard Frank-Wolfe Step 0 always starts from free-flow AON
+/// 2) Dial, R.B. (2006) Transportation Research Part B, 40(10), 917-936.
+/// DOI: 10.1016/j.trb.2006.02.008
+/// => first explicit "warm start" in static assignment context.
+/// 3) Levin, M.W. and Boyles, S.D. (2015) Transportmetrica B, 3(2), 99-113.
+/// DOI: 10.1080/21680566.2014.937788
+/// => warm-starting DTA with STA solutions.
 pub trait AssignmentMethod {
     /// Perform traffic assignment.
     ///
@@ -442,6 +460,10 @@ pub trait AssignmentMethod {
     /// * `od_matrix` - Origin-destination demand matrix.
     /// * `vdf` - Volume-delay function.
     /// * `config` - Algorithm configuration.
+    /// * `initial_volumes` - Warm-start link volumes from a previous run.
+    ///   When `Some`, skips the free-flow AON initialization and starts
+    ///   from the given volumes. When `None`, performs the standard
+    ///   cold-start (AON at free-flow costs).
     ///
     /// # Returns
     /// An [`AssignmentResult`] with link volumes, costs, and convergence info.
@@ -452,6 +474,7 @@ pub trait AssignmentMethod {
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
+        initial_volumes: Option<&HashMap<LinkID, f64>>,
     ) -> Result<AssignmentResult, AssignmentError>;
 }
 

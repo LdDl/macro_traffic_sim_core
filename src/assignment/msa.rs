@@ -5,7 +5,8 @@
 //!
 //! ## Algorithm
 //!
-//! 1. Initialize with free-flow costs and all-or-nothing (AoN) loading.
+//! 1. Initialize: cold start (free-flow AoN) or warm start (reuse
+//!    previous link volumes - see [`AssignmentMethod`]).
 //! 2. At each iteration `n`:
 //!    a. Compute link costs from current volumes via the VDF.
 //!    b. Perform AoN assignment at current costs to get auxiliary volumes `y`.
@@ -28,9 +29,12 @@
 //! - Convergence is guaranteed but slower than Frank-Wolfe.
 //! - Good for quick prototyping or when line search cost is a concern.
 
+use std::collections::HashMap;
+
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
+use crate::gmns::types::LinkID;
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
@@ -74,23 +78,28 @@ impl AssignmentMethod for Msa {
         od_matrix: &dyn OdMatrix,
         vdf: &dyn VolumeDelayFunction,
         config: &AssignmentConfig,
+        initial_volumes: Option<&HashMap<LinkID, f64>>,
     ) -> Result<AssignmentResult, AssignmentError> {
-        log_main!(EVENT_ASSIGNMENT, "Starting MSA assignment",);
+        let warm = initial_volumes.is_some();
+        log_main!(EVENT_ASSIGNMENT, "Starting MSA assignment", warm_start = warm);
 
         let n = graph.num_links;
 
         let mut costs = vec![0.0; n];
-        let mut volumes = vec![0.0; n];
+        let mut volumes = match initial_volumes {
+            Some(iv) => graph.hashmap_to_vec(iv),
+            None => vec![0.0; n],
+        };
         let mut aux_volumes = vec![0.0; n];
 
-        // Step 0: Initialize with free-flow costs
-        graph.compute_costs(&volumes, vdf, &mut costs);
-
-        // Initial all-or-nothing assignment
-        #[cfg(feature = "parallel")]
-        graph.all_or_nothing_parallel(od_matrix, &costs, &mut volumes);
-        #[cfg(not(feature = "parallel"))]
-        graph.all_or_nothing(od_matrix, &costs, &mut volumes);
+        if initial_volumes.is_none() {
+            // Step 0 (cold start): AON at free-flow costs
+            graph.compute_costs(&volumes, vdf, &mut costs);
+            #[cfg(feature = "parallel")]
+            graph.all_or_nothing_parallel(od_matrix, &costs, &mut volumes);
+            #[cfg(not(feature = "parallel"))]
+            graph.all_or_nothing(od_matrix, &costs, &mut volumes);
+        }
 
         let mut converged = false;
         let mut relative_gap = f64::MAX;

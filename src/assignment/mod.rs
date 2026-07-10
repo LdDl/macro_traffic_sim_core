@@ -26,7 +26,7 @@
 //!
 //! ## Components
 //!
-//! - [`AssignmentMethod`] - Trait for assignment algorithms
+//! - [`AssignmentMethod`] - Trait for assignment algorithms (supports warm start)
 //! - [`VolumeDelayFunction`] - Trait for volume-delay functions
 //! - [`BprFunction`] - BPR volume-delay function
 //! - [`ConicalDelayFunction`] - Conical VDF (Spiess, 1990)
