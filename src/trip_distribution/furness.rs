@@ -164,6 +164,9 @@ pub fn furness_balance_with_buffers(
     col_sums: &mut [f64],
     col_factors: &mut [f64],
 ) -> Result<usize, TripDistributionError> {
+    #[cfg(feature = "parallel")]
+    use rayon::prelude::*;
+
     assert_eq!(matrix.len(), n * n);
     assert_eq!(target_productions.len(), n);
     assert_eq!(target_attractions.len(), n);
@@ -171,7 +174,21 @@ pub fn furness_balance_with_buffers(
     assert_eq!(col_factors.len(), n);
 
     for iteration in 0..config.max_iterations {
-        // Row scaling (row-major access - cache-friendly)
+        // Row scaling
+        #[cfg(feature = "parallel")]
+        matrix
+            .par_chunks_mut(n)
+            .enumerate()
+            .for_each(|(i, row)| {
+                let row_sum: f64 = row.iter().sum();
+                if row_sum > 0.0 && target_productions[i] > 0.0 {
+                    let factor = target_productions[i] / row_sum;
+                    for v in row.iter_mut() {
+                        *v *= factor;
+                    }
+                }
+            });
+        #[cfg(not(feature = "parallel"))]
         for i in 0..n {
             let row = &mut matrix[i * n..(i + 1) * n];
             let row_sum: f64 = row.iter().sum();
@@ -183,15 +200,43 @@ pub fn furness_balance_with_buffers(
             }
         }
 
-        // Column scaling (cache-friendly: accumulate col sums in row-major pass,
-        // then apply factors in a second row-major pass)
-        col_sums.fill(0.0);
-        for i in 0..n {
-            let row = &matrix[i * n..(i + 1) * n];
-            for j in 0..n {
-                col_sums[j] += row[j];
+        // Column sums
+        #[cfg(feature = "parallel")]
+        {
+            let merged = matrix
+                .par_chunks(n)
+                .fold(
+                    || vec![0.0; n],
+                    |mut acc, row| {
+                        for j in 0..n {
+                            acc[j] += row[j];
+                        }
+                        acc
+                    },
+                )
+                .reduce(
+                    || vec![0.0; n],
+                    |mut a, b| {
+                        for j in 0..n {
+                            a[j] += b[j];
+                        }
+                        a
+                    },
+                );
+            col_sums.copy_from_slice(&merged);
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            col_sums.fill(0.0);
+            for i in 0..n {
+                let row = &matrix[i * n..(i + 1) * n];
+                for j in 0..n {
+                    col_sums[j] += row[j];
+                }
             }
         }
+
+        // Column factors
         for j in 0..n {
             if col_sums[j] > 0.0 && target_attractions[j] > 0.0 {
                 col_factors[j] = target_attractions[j] / col_sums[j];
@@ -199,6 +244,15 @@ pub fn furness_balance_with_buffers(
                 col_factors[j] = 1.0;
             }
         }
+
+        // Apply column factors
+        #[cfg(feature = "parallel")]
+        matrix.par_chunks_mut(n).for_each(|row| {
+            for j in 0..n {
+                row[j] *= col_factors[j];
+            }
+        });
+        #[cfg(not(feature = "parallel"))]
         for i in 0..n {
             let row = &mut matrix[i * n..(i + 1) * n];
             for j in 0..n {
@@ -206,17 +260,32 @@ pub fn furness_balance_with_buffers(
             }
         }
 
-        // After column scaling, column sums match targets exactly.
-        // Only need to check row sums for convergence (1 scan instead of 2).
-        let mut max_error = 0.0_f64;
-        for i in 0..n {
-            if target_productions[i] > 0.0 {
-                let row = &matrix[i * n..(i + 1) * n];
-                let row_sum: f64 = row.iter().sum();
-                let err = ((row_sum - target_productions[i]) / target_productions[i]).abs();
-                max_error = max_error.max(err);
+        // Convergence check (row sums only -- column sums already exact)
+        #[cfg(feature = "parallel")]
+        let max_error: f64 = matrix
+            .par_chunks(n)
+            .enumerate()
+            .map(|(i, row)| {
+                if target_productions[i] > 0.0 {
+                    let row_sum: f64 = row.iter().sum();
+                    ((row_sum - target_productions[i]) / target_productions[i]).abs()
+                } else {
+                    0.0
+                }
+            })
+            .reduce(|| 0.0_f64, f64::max);
+        #[cfg(not(feature = "parallel"))]
+        let max_error = {
+            let mut err = 0.0_f64;
+            for i in 0..n {
+                if target_productions[i] > 0.0 {
+                    let row = &matrix[i * n..(i + 1) * n];
+                    let row_sum: f64 = row.iter().sum();
+                    err = err.max(((row_sum - target_productions[i]) / target_productions[i]).abs());
+                }
             }
-        }
+            err
+        };
 
         log_all!(
             EVENT_FURNESS_ITERATION,
