@@ -198,7 +198,7 @@ pub struct ModelConfig {
     pub warm_start: bool,
     /// Multi-class user definitions. When `Some`, the pipeline splits
     /// the AUTO OD by each class's `demand_fraction` and runs
-    /// multi-class PCU-based assignment (Dafermos 1972, Case 1).
+    /// multi-class PCU-based assignment (Dafermos 1972).
     /// When `None`, single-class assignment is used.
     pub user_classes: Option<Vec<UserClassConfig>>,
 }

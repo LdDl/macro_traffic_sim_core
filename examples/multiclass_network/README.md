@@ -133,7 +133,7 @@ relative link costs.
 An alternative formulation uses class-specific VDFs (each class has its own
 volume-delay function). That turns the problem into a variational inequality -
 the Beckmann objective no longer applies, and solvers like diagonalization
-(Florian & Nguyen, 1974) are needed. Convergence is not guaranteed for
+(Dafermos, 1982) are needed. Convergence is not guaranteed for
 general cost structures and computational cost is substantially higher.
 We do not implement this.
 

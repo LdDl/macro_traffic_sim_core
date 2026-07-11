@@ -26,7 +26,7 @@
 //! An alternative formulation uses class-specific VDFs (each class has its
 //! own volume-delay function). That turns the problem into a variational
 //! inequality (VI) - the Beckmann objective no longer applies, and solvers
-//! like diagonalization (Florian & Nguyen, 1974) are needed. Each outer
+//! like diagonalization (Dafermos, 1982) are needed. Each outer
 //! iteration of diagonalization solves a full single-class assignment.
 //! Convergence is not guaranteed for general cost structures, and
 //! computational cost is substantially higher. We do not implement this.
