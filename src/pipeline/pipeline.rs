@@ -14,7 +14,7 @@ use super::error::{InvalidInputReason, PipelineError};
 use super::phase::{PipelinePhase, ProgressEvent};
 use crate::assignment::{
     AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
-    gradient_projection::GradientProjection, msa::Msa,
+    gradient_projection::GradientProjection, multiclass, msa::Msa,
 };
 use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
@@ -31,6 +31,7 @@ use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, EVENT_PREFLIGHT, set_v
 use crate::zone::Zone;
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
+const EPS_DEMAND_FRACTION: f64 = 1e-6;
 
 /// Timing information for each pipeline step.
 ///
@@ -194,6 +195,7 @@ pub fn run_four_step_model(
     let mut mode_od;
     let mut assignment_result;
     let mut prev_volumes: Option<HashMap<LinkID, f64>> = None;
+    let mut prev_class_volumes: Option<HashMap<String, HashMap<LinkID, f64>>> = None;
     let mut per_feedback_assignments: Vec<AssignmentResult> = Vec::new();
 
     let max_feedback = config.feedback_iterations.max(1);
@@ -275,14 +277,66 @@ pub fn run_four_step_model(
 
         notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
         let step_start = Instant::now();
-        let warm_vols = if config.warm_start { prev_volumes.as_ref() } else { None };
-        assignment_result = run_assignment(
-            network,
-            &igraph,
-            auto_od,
-            &config,
-            warm_vols,
-        )?;
+
+        assignment_result = if let Some(ref uc) = config.user_classes {
+            let fraction_sum: f64 = uc.iter().map(|c| c.demand_fraction).sum();
+            if (fraction_sum - 1.0).abs() > EPS_DEMAND_FRACTION {
+                return Err(SimError::from(
+                    crate::assignment::error::AssignmentError::InvalidConfig(format!(
+                        "demand_fraction values must sum to 1.0, got {:.6}",
+                        fraction_sum,
+                    )),
+                ));
+            }
+            let classes: Vec<_> = uc.iter().map(|c| c.to_user_class()).collect();
+            let class_ods: Vec<DenseOdMatrix> = uc
+                .iter()
+                .map(|c| scale_od(auto_od, c.demand_fraction))
+                .collect();
+            let od_refs: Vec<&dyn OdMatrix> =
+                class_ods.iter().map(|o| o as &dyn OdMatrix).collect();
+            let warm_cv = if config.warm_start {
+                prev_class_volumes.as_ref()
+            } else {
+                None
+            };
+            let result = match config.assignment_method {
+                AssignmentMethodType::FrankWolfe => multiclass::assign_multiclass_fw(
+                    &igraph,
+                    &classes,
+                    &od_refs,
+                    &config.bpr,
+                    &config.assignment_config,
+                    warm_cv,
+                )?,
+                AssignmentMethodType::Msa => multiclass::assign_multiclass_msa(
+                    &igraph,
+                    &classes,
+                    &od_refs,
+                    &config.bpr,
+                    &config.assignment_config,
+                    warm_cv,
+                )?,
+                AssignmentMethodType::GradientProjection => {
+                    return Err(SimError::from(
+                        crate::assignment::error::AssignmentError::InvalidConfig(
+                            "gradient projection does not support multi-class assignment"
+                                .to_string(),
+                        ),
+                    ));
+                }
+            };
+            prev_class_volumes = result.class_volumes.clone();
+            result
+        } else {
+            let warm_vols = if config.warm_start {
+                prev_volumes.as_ref()
+            } else {
+                None
+            };
+            run_assignment(network, &igraph, auto_od, &config, warm_vols)?
+        };
+
         prev_volumes = Some(assignment_result.link_volumes.clone());
         per_feedback_assignments.push(assignment_result.clone());
         t_assignment += step_start.elapsed();
@@ -492,6 +546,14 @@ fn run_assignment(
             )
         }
     }
+}
+
+/// Scale an OD matrix by a fraction. Used to split total AUTO demand
+/// into per-class OD matrices for multi-class assignment.
+fn scale_od(od: &DenseOdMatrix, fraction: f64) -> DenseOdMatrix {
+    let zone_ids = od.zone_ids().to_vec();
+    let data: Vec<f64> = od.data().iter().map(|&v| v * fraction).collect();
+    DenseOdMatrix::from_data(zone_ids, data)
 }
 
 /// Convert a skim matrix from hours to minutes.
