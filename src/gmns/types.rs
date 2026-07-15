@@ -8,7 +8,7 @@
 //!
 //! ## Enumerations
 //!
-//! - [`AgentType`] -- mode of travel (Auto, Bike, Walk)
+//! - [`AgentType`] -- mode of travel (Auto, Bike, Walk, Truck)
 //! - [`LinkType`] -- road classification from OSM highway tags
 //! - [`ControlType`] -- traffic signal presence
 //! - [`BoundaryType`] -- network edge classification
@@ -53,6 +53,7 @@ pub type ZoneID = i64;
 /// assert_eq!(AgentType::Auto.to_string(), "auto");
 /// assert_eq!(AgentType::Bike.to_string(), "bike");
 /// assert_eq!(AgentType::Walk.to_string(), "walk");
+/// assert_eq!(AgentType::Truck.to_string(), "truck");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentType {
@@ -60,6 +61,7 @@ pub enum AgentType {
     Auto,
     Bike,
     Walk,
+    Truck,
 }
 
 impl fmt::Display for AgentType {
@@ -69,6 +71,7 @@ impl fmt::Display for AgentType {
             AgentType::Auto => "auto",
             AgentType::Bike => "bike",
             AgentType::Walk => "walk",
+            AgentType::Truck => "truck",
         };
         write!(f, "{}", s)
     }

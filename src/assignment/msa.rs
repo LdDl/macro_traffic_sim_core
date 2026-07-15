@@ -157,6 +157,7 @@ impl AssignmentMethod for Msa {
             iterations: iteration,
             relative_gap,
             converged,
+            class_volumes: None,
         })
     }
 }

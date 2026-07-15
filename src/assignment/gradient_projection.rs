@@ -382,6 +382,7 @@ impl AssignmentMethod for GradientProjection {
             iterations: iteration,
             relative_gap,
             converged,
+            class_volumes: None,
         })
     }
 }

@@ -4,9 +4,9 @@
 //!
 //! ## Components
 //!
-//! - [`AssignmentMethodType`] -- selects the assignment algorithm
-//! - [`ModelConfig`] -- all parameters for the pipeline
-//! - [`ModelConfigBuilder`] -- builder for `ModelConfig`
+//! - [`AssignmentMethodType`] - selects the assignment algorithm
+//! - [`ModelConfig`] - all parameters for the pipeline
+//! - [`ModelConfigBuilder`] - builder for `ModelConfig`
 //!
 //! ## Examples
 //!
@@ -39,9 +39,94 @@
 //! assert_eq!(config.feedback_iterations, 5);
 //! ```
 
+use crate::assignment::multiclass::UserClass;
 use crate::assignment::{AssignmentConfig, BprFunction};
 use crate::trip_distribution::furness::FurnessConfig;
 use crate::verbose::VerboseLevel;
+
+/// Multi-class user definition for the pipeline.
+///
+/// When provided in [`ModelConfig::user_classes`], the AUTO OD matrix
+/// is split by `demand_fraction` and multi-class assignment is used.
+///
+/// # Beckmann symmetry condition
+///
+/// For the Frank-Wolfe / MSA algorithms to converge to the exact
+/// multi-class User Equilibrium, all classes must satisfy:
+///
+///   `ff_time_multiplier / pcu = const` across all classes
+///
+/// This is the Dafermos (1972) symmetry condition. The assignment
+/// will return an error if it is violated.
+///
+/// Any constant ratio works. The simplest is `ff_time_multiplier = pcu`
+/// (ratio = 1.0), but any `k` is valid as long as it is the same for
+/// all classes:
+///
+/// ```
+/// use macro_traffic_sim_core::config::UserClassConfig;
+///
+/// // OK: ratio = 1.0 for both (mu = pcu)
+/// let car   = UserClassConfig::new("car",   1.0, 1.0, 0.9);
+/// let truck = UserClassConfig::new("truck", 2.5, 2.5, 0.1);
+///
+/// // OK: ratio = 0.5 for both
+/// let car   = UserClassConfig::new("car",   1.0, 0.5, 0.8);
+/// let truck = UserClassConfig::new("truck", 3.0, 1.5, 0.2);
+///
+/// // OK: ratio = 1.3 for all three classes
+/// let car   = UserClassConfig::new("car",   1.0, 1.3, 0.7);
+/// let truck = UserClassConfig::new("truck", 2.5, 3.25, 0.2);
+/// let bus   = UserClassConfig::new("bus",   3.0, 3.9, 0.1);
+/// ```
+///
+/// This does NOT work - `assign_multiclass_fw` returns
+/// `Err(InvalidConfig("Beckmann symmetry condition violated: ..."))`:
+///
+/// ```
+/// use macro_traffic_sim_core::config::UserClassConfig;
+/// use macro_traffic_sim_core::assignment::multiclass::UserClass;
+///
+/// // BAD: 1.0/1.0 = 1.0, but 1.2/2.5 = 0.48 - ratios differ
+/// let _car   = UserClassConfig::new("car",   1.0, 1.0, 0.9);
+/// let _truck = UserClassConfig::new("truck", 2.5, 1.2, 0.1);
+/// // These configs will be rejected by the assignment at runtime.
+/// ```
+///
+/// # demand_fraction
+///
+/// Fractions across all classes must sum to 1.0. The pipeline
+/// validates this and returns an error if the sum deviates
+/// by more than 1e-6.
+#[derive(Debug, Clone)]
+pub struct UserClassConfig {
+    pub name: String,
+    /// Passenger Car Units (PCE) per vehicle. Cars = 1.0,
+    /// trucks typically 2.0-3.0.
+    pub pcu: f64,
+    /// Multiplier applied to link travel time for this class.
+    /// Must satisfy ff_time_multiplier / pcu = const for all classes
+    /// (Beckmann symmetry condition).
+    pub ff_time_multiplier: f64,
+    /// Fraction of total AUTO demand assigned to this class.
+    /// All fractions must sum to 1.0.
+    pub demand_fraction: f64,
+}
+
+impl UserClassConfig {
+    pub fn new(name: &str, pcu: f64, ff_time_multiplier: f64, demand_fraction: f64) -> Self {
+        UserClassConfig {
+            name: name.to_string(),
+            pcu,
+            ff_time_multiplier,
+            demand_fraction,
+        }
+    }
+
+    pub fn to_user_class(&self) -> UserClass {
+        UserClass::new(&self.name, self.pcu, self.ff_time_multiplier)
+    }
+}
 
 /// Assignment method selection.
 ///
@@ -111,6 +196,11 @@ pub struct ModelConfig {
     /// iteration are passed as the initial solution, skipping the
     /// cold-start AON initialization. Default: true.
     pub warm_start: bool,
+    /// Multi-class user definitions. When `Some`, the pipeline splits
+    /// the AUTO OD by each class's `demand_fraction` and runs
+    /// multi-class PCU-based assignment (Dafermos 1972).
+    /// When `None`, single-class assignment is used.
+    pub user_classes: Option<Vec<UserClassConfig>>,
 }
 
 impl Default for ModelConfig {
@@ -124,6 +214,7 @@ impl Default for ModelConfig {
             verbose_level: VerboseLevel::None,
             gp_step_scale: 0.1,
             warm_start: true,
+            user_classes: None,
         }
     }
 }
@@ -211,6 +302,12 @@ impl ModelConfigBuilder {
     /// Enable or disable warm start for the 2nd feedback iteration onwards.
     pub fn with_warm_start(mut self, enabled: bool) -> Self {
         self.instance.warm_start = enabled;
+        self
+    }
+
+    /// Set multi-class user definitions for PCU-based assignment.
+    pub fn with_user_classes(mut self, classes: Vec<UserClassConfig>) -> Self {
+        self.instance.user_classes = Some(classes);
         self
     }
 
