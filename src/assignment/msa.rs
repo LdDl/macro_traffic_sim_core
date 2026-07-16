@@ -158,6 +158,7 @@ impl AssignmentMethod for Msa {
             relative_gap,
             converged,
             class_volumes: None,
+            path_flows: None,
         })
     }
 }

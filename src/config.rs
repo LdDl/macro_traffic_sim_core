@@ -305,6 +305,14 @@ impl ModelConfigBuilder {
         self
     }
 
+    /// Store per-OD paths in assignment results (Gradient Projection only).
+    /// When true, [`AssignmentResult::path_flows`] is populated after GP.
+    /// Ignored by Frank-Wolfe and MSA. Default: false.
+    pub fn with_store_paths(mut self, enabled: bool) -> Self {
+        self.instance.assignment_config.store_paths = enabled;
+        self
+    }
+
     /// Set multi-class user definitions for PCU-based assignment.
     pub fn with_user_classes(mut self, classes: Vec<UserClassConfig>) -> Self {
         self.instance.user_classes = Some(classes);

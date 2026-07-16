@@ -233,6 +233,7 @@ impl AssignmentMethod for FrankWolfe {
             relative_gap,
             converged,
             class_volumes: None,
+            path_flows: None,
         })
     }
 }

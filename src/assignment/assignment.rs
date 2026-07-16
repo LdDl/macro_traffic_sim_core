@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
 use crate::gmns::meso::network::Network;
-use crate::gmns::types::LinkID;
+use crate::gmns::types::{LinkID, ZoneID};
 use crate::od::OdMatrix;
 
 const EPS_BETA: f64 = 1e-12;
@@ -385,6 +385,7 @@ impl VolumeDelayFunction for AkcelikDelayFunction {
 /// let config = AssignmentConfig {
 ///     max_iterations: 500,
 ///     convergence_gap: 1e-6,
+///     store_paths: false,
 /// };
 /// assert_eq!(config.max_iterations, 500);
 /// ```
@@ -394,6 +395,11 @@ pub struct AssignmentConfig {
     pub max_iterations: usize,
     /// Convergence threshold for relative gap.
     pub convergence_gap: f64,
+    /// Store per-OD paths in the result (Gradient Projection only).
+    /// When true, [`AssignmentResult::path_flows`] is populated.
+    /// Ignored by Frank-Wolfe and MSA (link-based methods have no paths).
+    /// Default: false.
+    pub store_paths: bool,
 }
 
 impl Default for AssignmentConfig {
@@ -401,8 +407,23 @@ impl Default for AssignmentConfig {
         AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         }
     }
+}
+
+/// A single path between an OD pair with its flow and cost.
+///
+/// Produced by Gradient Projection when
+/// [`AssignmentConfig::store_paths`] is true.
+#[derive(Debug, Clone)]
+pub struct OdPath {
+    pub origin_zone: ZoneID,
+    pub dest_zone: ZoneID,
+    pub path_index: u32,
+    pub flow: f64,
+    pub cost: f64,
+    pub link_ids: Vec<LinkID>,
 }
 
 /// Result of a traffic assignment.
@@ -426,6 +447,9 @@ pub struct AssignmentResult {
     /// `None` for single-class assignment.
     /// Key is the class name from [`multiclass::UserClass`].
     pub class_volumes: Option<HashMap<String, HashMap<LinkID, f64>>>,
+    /// Per-OD paths with flows (Gradient Projection only).
+    /// `None` when `store_paths` is false or method is link-based.
+    pub path_flows: Option<Vec<OdPath>>,
 }
 
 /// Trait for traffic assignment methods.

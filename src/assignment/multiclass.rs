@@ -474,6 +474,7 @@ fn build_result(
         relative_gap,
         converged,
         class_volumes: Some(cv),
+        path_flows: None,
     }
 }
 
@@ -521,6 +522,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut od = DenseOdMatrix::new(vec![1, 2]);
@@ -549,6 +551,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);
@@ -579,6 +582,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);
@@ -611,6 +615,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 200,
             convergence_gap: 1e-3,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);

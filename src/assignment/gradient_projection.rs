@@ -49,7 +49,7 @@ use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
+use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, OdPath, VolumeDelayFunction};
 
 /// A path stored as link indices for O(1) cost lookup.
 #[derive(Debug, Clone)]
@@ -376,6 +376,32 @@ impl AssignmentMethod for GradientProjection {
             converged = converged
         );
 
+        let path_flows = if config.store_paths {
+            let mut result = Vec::new();
+            for (&(origin, dest), paths) in &path_sets {
+                for (idx, path) in paths.iter().enumerate() {
+                    if path.flow <= 0.0 {
+                        continue;
+                    }
+                    result.push(OdPath {
+                        origin_zone: origin,
+                        dest_zone: dest,
+                        path_index: idx as u32,
+                        flow: path.flow,
+                        cost: path.cost,
+                        link_ids: path
+                            .link_indices
+                            .iter()
+                            .map(|&li| graph.link_id(li))
+                            .collect(),
+                    });
+                }
+            }
+            Some(result)
+        } else {
+            None
+        };
+
         Ok(AssignmentResult {
             link_volumes: graph.volumes_to_hashmap(&volumes),
             link_costs: graph.costs_to_hashmap(&costs),
@@ -383,6 +409,113 @@ impl AssignmentMethod for GradientProjection {
             relative_gap,
             converged,
             class_volumes: None,
+            path_flows,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assignment::{AssignmentConfig, BprFunction};
+    use crate::gmns::meso::link::Link;
+    use crate::gmns::meso::network::Network;
+    use crate::gmns::meso::node::Node;
+    use crate::od::dense::DenseOdMatrix;
+
+    const EPS: f64 = 1e-10;
+
+    fn two_link_network() -> (Network, IndexedGraph) {
+        let mut net = Network::new();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(0.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(0.0, 1.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(100, 1, 2)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(101, 2, 1)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
+        let graph = IndexedGraph::from_network(&net);
+        (net, graph)
+    }
+
+    #[test]
+    fn store_paths_returns_od_paths() {
+        let (net, graph) = two_link_network();
+        let bpr = BprFunction::default();
+        let config = AssignmentConfig {
+            max_iterations: 50,
+            convergence_gap: 1e-4,
+            store_paths: true,
+        };
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 500.0);
+        od.set(2, 1, 300.0);
+
+        let gp = GradientProjection::new();
+        let result = gp
+            .assign(&net, &graph, &od, &bpr, &config, None)
+            .unwrap();
+
+        let paths = result.path_flows.expect("path_flows should be Some");
+        assert!(!paths.is_empty());
+
+        let paths_1_2: Vec<_> = paths
+            .iter()
+            .filter(|p| p.origin_zone == 1 && p.dest_zone == 2)
+            .collect();
+        assert!(!paths_1_2.is_empty());
+
+        let total_flow_1_2: f64 = paths_1_2.iter().map(|p| p.flow).sum();
+        assert!((total_flow_1_2 - 500.0).abs() < EPS);
+
+        for p in &paths {
+            assert!(p.flow > 0.0);
+            assert!(p.cost > 0.0);
+            assert!(!p.link_ids.is_empty());
+            assert!(p.link_ids.iter().all(|&id| id == 100 || id == 101));
+        }
+    }
+
+    #[test]
+    fn store_paths_false_returns_none() {
+        let (net, graph) = two_link_network();
+        let bpr = BprFunction::default();
+        let config = AssignmentConfig {
+            max_iterations: 50,
+            convergence_gap: 1e-4,
+            store_paths: false,
+        };
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 500.0);
+
+        let gp = GradientProjection::new();
+        let result = gp
+            .assign(&net, &graph, &od, &bpr, &config, None)
+            .unwrap();
+
+        assert!(result.path_flows.is_none());
     }
 }
