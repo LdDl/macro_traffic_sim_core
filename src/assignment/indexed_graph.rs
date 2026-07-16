@@ -337,6 +337,7 @@ impl IndexedGraph {
                     flow: demand,
                     cost,
                     link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                    class_index: None,
                 });
             }
         }
@@ -590,7 +591,120 @@ impl IndexedGraph {
                     flow: demand,
                     cost,
                     link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                    class_index: None,
                 });
+            }
+        }
+
+        result
+    }
+
+    /// Extract shortest paths for multi-class assignment.
+    ///
+    /// Under the Beckmann symmetry condition (`ff_time_multiplier / pcu
+    /// = const`), per-class cost is `ff_time_multiplier_m * t_a(V_a)` - 
+    /// a constant multiple of shared cost. Multiplying all edge
+    /// weights by a positive constant does not change the shortest path
+    /// tree, so all classes share the same SPT.
+    ///
+    /// This method exploits that property: Dijkstra runs once per
+    /// origin on `shared_costs`, then the SPT is walked once per class
+    /// to collect paths with class-specific demand and scaled cost.
+    ///
+    /// `od_matrices` and `ff_time_multipliers` must have the same
+    /// length (one per class). Each path stores `class_index` matching
+    /// the position in these slices.
+    pub fn extract_shortest_paths_multiclass(
+        &self,
+        od_matrices: &[&dyn crate::od::OdMatrix],
+        ff_time_multipliers: &[f64],
+        shared_costs: &[f64],
+    ) -> Vec<OdPath> {
+        let m = od_matrices.len();
+        let all_zone_ids = self.zone_ids().to_vec();
+        let zone_node_idxs: Vec<Option<usize>> =
+            all_zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+
+        let mut result = Vec::new();
+        let mut dij_dist = vec![f64::INFINITY; self.num_nodes];
+        let mut dij_pred: Vec<Option<usize>> = vec![None; self.num_nodes];
+        let mut dij_visited = vec![false; self.num_nodes];
+
+        for (oi, &origin_zone) in all_zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[oi] {
+                Some(i) => i,
+                None => continue,
+            };
+
+            self.dijkstra_into(
+                origin_idx,
+                shared_costs,
+                &mut dij_dist,
+                &mut dij_pred,
+                &mut dij_visited,
+            );
+
+            for (di, &dest_zone) in all_zone_ids.iter().enumerate() {
+                if oi == di {
+                    continue;
+                }
+
+                let dest_idx = match zone_node_idxs[di] {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                if dij_dist[dest_idx] == f64::INFINITY {
+                    continue;
+                }
+
+                let mut has_demand = false;
+                for ci in 0..m {
+                    if od_matrices[ci].get(origin_zone, dest_zone) > 0.0 {
+                        has_demand = true;
+                        break;
+                    }
+                }
+                if !has_demand {
+                    continue;
+                }
+
+                let mut link_indices = Vec::new();
+                let mut current = dest_idx;
+                loop {
+                    match dij_pred[current] {
+                        Some(li) => {
+                            link_indices.push(li);
+                            current = self.link_source_idx[li];
+                        }
+                        None => break,
+                    }
+                }
+                link_indices.reverse();
+
+                if link_indices.is_empty() {
+                    continue;
+                }
+
+                let base_cost: f64 = link_indices.iter().map(|&li| shared_costs[li]).sum();
+                let link_ids: Vec<LinkID> =
+                    link_indices.iter().map(|&li| self.idx_to_link[li]).collect();
+
+                for ci in 0..m {
+                    let demand = od_matrices[ci].get(origin_zone, dest_zone);
+                    if demand <= 0.0 {
+                        continue;
+                    }
+                    result.push(OdPath {
+                        origin_zone,
+                        dest_zone,
+                        path_index: 0,
+                        flow: demand,
+                        cost: base_cost * ff_time_multipliers[ci],
+                        link_ids: link_ids.clone(),
+                        class_index: Some(ci as u16),
+                    });
+                }
             }
         }
 

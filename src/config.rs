@@ -316,6 +316,11 @@ impl ModelConfigBuilder {
     }
 
     /// Set multi-class user definitions for PCU-based assignment.
+    ///
+    /// The position of each class in `classes` determines its
+    /// `class_index` in [`OdPath`](crate::assignment::OdPath):
+    /// the first element gets `class_index = Some(0)`, the second
+    /// `Some(1)`, and so on.
     pub fn with_user_classes(mut self, classes: Vec<UserClassConfig>) -> Self {
         self.instance.user_classes = Some(classes);
         self

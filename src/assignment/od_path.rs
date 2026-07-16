@@ -14,4 +14,9 @@ pub struct OdPath {
     pub flow: f64,
     pub cost: f64,
     pub link_ids: Vec<LinkID>,
+    /// User class index for multi-class assignment.
+    /// Maps to the position in the `classes` slice passed to
+    /// `assign_multiclass_fw` / `assign_multiclass_msa`.
+    /// `None` for single-class.
+    pub class_index: Option<u16>,
 }

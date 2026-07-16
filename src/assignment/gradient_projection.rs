@@ -394,6 +394,7 @@ impl AssignmentMethod for GradientProjection {
                             .iter()
                             .map(|&li| graph.link_id(li))
                             .collect(),
+                        class_index: None,
                     });
                 }
             }
