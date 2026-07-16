@@ -49,7 +49,10 @@ use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
+use super::{
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
+    extract_shortest_paths,
+};
 
 const INV_PHI: f64 = 0.618_033_988_749_895;
 const TOL: f64 = 1e-8;
@@ -226,6 +229,12 @@ impl AssignmentMethod for FrankWolfe {
             converged = converged
         );
 
+        let path_flows = if config.store_paths {
+            Some(extract_shortest_paths(graph, od_matrix, &costs))
+        } else {
+            None
+        };
+
         Ok(AssignmentResult {
             link_volumes: graph.volumes_to_hashmap(&volumes),
             link_costs: graph.costs_to_hashmap(&costs),
@@ -233,7 +242,7 @@ impl AssignmentMethod for FrankWolfe {
             relative_gap,
             converged,
             class_volumes: None,
-            path_flows: None,
+            path_flows,
         })
     }
 }

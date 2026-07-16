@@ -40,7 +40,10 @@ use crate::log_main;
 use crate::od::OdMatrix;
 use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERGENCE};
 
-use super::{AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction};
+use super::{
+    AssignmentConfig, AssignmentMethod, AssignmentResult, VolumeDelayFunction,
+    extract_shortest_paths,
+};
 
 /// Method of Successive Averages traffic assignment.
 ///
@@ -151,6 +154,12 @@ impl AssignmentMethod for Msa {
             converged = converged
         );
 
+        let path_flows = if config.store_paths {
+            Some(extract_shortest_paths(graph, od_matrix, &costs))
+        } else {
+            None
+        };
+
         Ok(AssignmentResult {
             link_volumes: graph.volumes_to_hashmap(&volumes),
             link_costs: graph.costs_to_hashmap(&costs),
@@ -158,7 +167,7 @@ impl AssignmentMethod for Msa {
             relative_gap,
             converged,
             class_volumes: None,
-            path_flows: None,
+            path_flows,
         })
     }
 }

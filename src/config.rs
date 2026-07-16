@@ -305,9 +305,11 @@ impl ModelConfigBuilder {
         self
     }
 
-    /// Store per-OD paths in assignment results (Gradient Projection only).
-    /// When true, [`AssignmentResult::path_flows`] is populated after GP.
-    /// Ignored by Frank-Wolfe and MSA. Default: false.
+    /// Store per-OD paths in assignment results.
+    /// When true, [`AssignmentResult::path_flows`] is populated.
+    /// GP: multiple paths per OD pair (native path sets).
+    /// FW/MSA: one shortest path per OD pair (post-processing on final costs).
+    /// Default: false.
     pub fn with_store_paths(mut self, enabled: bool) -> Self {
         self.instance.assignment_config.store_paths = enabled;
         self

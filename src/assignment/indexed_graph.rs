@@ -18,6 +18,8 @@ use rayon::prelude::*;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{LinkID, NodeID, ZoneID};
 
+use super::OdPath;
+
 /// Compact indexed graph in CSR (Compressed Sparse Row) format.
 ///
 /// All node and link IDs are mapped to dense indices 0..N and 0..E.
@@ -260,6 +262,82 @@ impl IndexedGraph {
                         None => break,
                     }
                 }
+            }
+        }
+    }
+
+    /// All-or-nothing assignment that also builds per-OD shortest paths.
+    ///
+    /// Same as [`all_or_nothing`] but collects `OdPath` structs while
+    /// walking predecessors -- no extra Dijkstra pass needed.
+    /// `paths_out` is cleared and filled with one path per OD pair.
+    pub fn all_or_nothing_with_paths(
+        &self,
+        od_matrix: &dyn crate::od::OdMatrix,
+        link_costs: &[f64],
+        volumes: &mut [f64],
+        paths_out: &mut Vec<OdPath>,
+    ) {
+        volumes.fill(0.0);
+        paths_out.clear();
+        let zone_ids = od_matrix.zone_ids();
+
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+
+        let mut dist = vec![f64::INFINITY; self.num_nodes];
+        let mut pred: Vec<Option<usize>> = vec![None; self.num_nodes];
+        let mut visited = vec![false; self.num_nodes];
+
+        for (oi, &origin_zone) in zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[oi] {
+                Some(i) => i,
+                None => continue,
+            };
+
+            self.dijkstra_into(origin_idx, link_costs, &mut dist, &mut pred, &mut visited);
+
+            for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                if oi == di {
+                    continue;
+                }
+                let demand = od_matrix.get(origin_zone, dest_zone);
+                if demand <= 0.0 {
+                    continue;
+                }
+                let dest_idx = match zone_node_idxs[di] {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                let mut link_indices = Vec::new();
+                let mut current = dest_idx;
+                loop {
+                    match pred[current] {
+                        Some(li) => {
+                            volumes[li] += demand;
+                            link_indices.push(li);
+                            current = self.link_source_idx[li];
+                        }
+                        None => break,
+                    }
+                }
+                link_indices.reverse();
+
+                if link_indices.is_empty() {
+                    continue;
+                }
+
+                let cost: f64 = link_indices.iter().map(|&li| link_costs[li]).sum();
+
+                paths_out.push(OdPath {
+                    origin_zone,
+                    dest_zone,
+                    path_index: 0,
+                    flow: demand,
+                    cost,
+                    link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                });
             }
         }
     }
