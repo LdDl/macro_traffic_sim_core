@@ -76,8 +76,10 @@ pub mod gradient_projection;
 pub mod indexed_graph;
 pub mod msa;
 pub mod multiclass;
+pub mod od_path;
 pub mod shortest_path;
 
 pub use self::assignment::*;
 pub use self::indexed_graph::IndexedGraph;
+pub use self::od_path::OdPath;
 pub use self::{frank_wolfe::*, gradient_projection::*, msa::*, shortest_path::*};

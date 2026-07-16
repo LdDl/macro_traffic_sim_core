@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{LinkID, NodeID, ZoneID};
 
-use super::OdPath;
+use super::od_path::OdPath;
 
 /// Compact indexed graph in CSR (Compressed Sparse Row) format.
 ///
@@ -508,6 +508,95 @@ impl IndexedGraph {
         skim
     }
 
+    /// Extract one shortest path per OD pair from link costs.
+    ///
+    /// Runs Dijkstra from each origin zone and builds the shortest
+    /// path to every destination with positive demand. Each path
+    /// carries the full OD demand as flow (link-based methods do
+    /// not track per-path flow distribution).
+    ///
+    /// Used by Frank-Wolfe and MSA when `store_paths` is true.
+    pub fn extract_shortest_paths(
+        &self,
+        od_matrix: &dyn crate::od::OdMatrix,
+        costs: &[f64],
+    ) -> Vec<OdPath> {
+        let zone_ids = od_matrix.zone_ids().to_vec();
+        let mut result = Vec::new();
+
+        let zone_node_idxs: Vec<Option<usize>> =
+            zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+
+        let mut dij_dist = vec![f64::INFINITY; self.num_nodes];
+        let mut dij_pred: Vec<Option<usize>> = vec![None; self.num_nodes];
+        let mut dij_visited = vec![false; self.num_nodes];
+
+        for (oi, &origin_zone) in zone_ids.iter().enumerate() {
+            let origin_idx = match zone_node_idxs[oi] {
+                Some(i) => i,
+                None => continue,
+            };
+
+            self.dijkstra_into(
+                origin_idx,
+                costs,
+                &mut dij_dist,
+                &mut dij_pred,
+                &mut dij_visited,
+            );
+
+            for (di, &dest_zone) in zone_ids.iter().enumerate() {
+                if oi == di {
+                    continue;
+                }
+
+                let demand = od_matrix.get(origin_zone, dest_zone);
+                if demand <= 0.0 {
+                    continue;
+                }
+
+                let dest_idx = match zone_node_idxs[di] {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                if dij_dist[dest_idx] == f64::INFINITY {
+                    continue;
+                }
+
+                let mut link_indices = Vec::new();
+                let mut current = dest_idx;
+                loop {
+                    match dij_pred[current] {
+                        Some(li) => {
+                            link_indices.push(li);
+                            current = self.link_source_idx[li];
+                        }
+                        None => break,
+                    }
+                }
+                link_indices.reverse();
+
+                if link_indices.is_empty() {
+                    continue;
+                }
+
+                let cost: f64 = link_indices.iter().map(|&li| costs[li]).sum();
+
+                result.push(OdPath {
+                    origin_zone,
+                    dest_zone,
+                    path_index: 0,
+                    flow: demand,
+                    cost,
+                    link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                });
+            }
+        }
+
+        result
+    }
+
     /// Parallel skim matrix computation.
     /// Each origin zone runs Dijkstra independently, returns a row of
     /// distances. Rows are merged into the skim matrix after collection.
@@ -549,5 +638,141 @@ impl IndexedGraph {
             }
         }
         skim
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assignment::BprFunction;
+    use crate::gmns::meso::link::Link;
+    use crate::gmns::meso::node::Node;
+    use crate::od::OdMatrix;
+    use crate::od::dense::DenseOdMatrix;
+
+    fn two_link_network() -> IndexedGraph {
+        let mut net = Network::new();
+        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build()).unwrap();
+        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(0.0, 1.0).build()).unwrap();
+        net.add_link(
+            Link::new(100, 1, 2).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build(),
+        ).unwrap();
+        net.add_link(
+            Link::new(101, 2, 1).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build(),
+        ).unwrap();
+        IndexedGraph::from_network(&net)
+    }
+
+    fn diamond_network() -> IndexedGraph {
+        let mut net = Network::new();
+        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build()).unwrap();
+        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(1.0, 0.0).build()).unwrap();
+        net.add_node(Node::new(3).with_zone_id(3).with_coordinates(0.0, 1.0).build()).unwrap();
+        net.add_node(Node::new(4).with_zone_id(4).with_coordinates(1.0, 1.0).build()).unwrap();
+        net.add_link(Link::new(100, 1, 2).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
+        net.add_link(Link::new(101, 1, 3).with_length_meters(2000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
+        net.add_link(Link::new(102, 2, 4).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
+        net.add_link(Link::new(103, 3, 4).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
+        IndexedGraph::from_network(&net)
+    }
+
+    fn free_flow_costs(graph: &IndexedGraph) -> Vec<f64> {
+        let bpr = BprFunction::default();
+        let mut costs = vec![0.0; graph.num_links];
+        graph.compute_costs(&vec![0.0; graph.num_links], &bpr, &mut costs);
+        costs
+    }
+
+    #[test]
+    fn extract_paths_one_per_od_pair() {
+        let graph = two_link_network();
+        let costs = free_flow_costs(&graph);
+
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 500.0);
+        od.set(2, 1, 300.0);
+
+        let paths = graph.extract_shortest_paths(&od, &costs);
+
+        assert_eq!(paths.len(), 2);
+
+        let p12: Vec<_> = paths.iter().filter(|p| p.origin_zone == 1 && p.dest_zone == 2).collect();
+        assert_eq!(p12.len(), 1);
+        assert!((p12[0].flow - 500.0).abs() < 1e-10);
+        assert_eq!(p12[0].path_index, 0);
+        assert_eq!(p12[0].link_ids, vec![100]);
+
+        let p21: Vec<_> = paths.iter().filter(|p| p.origin_zone == 2 && p.dest_zone == 1).collect();
+        assert_eq!(p21.len(), 1);
+        assert!((p21[0].flow - 300.0).abs() < 1e-10);
+        assert_eq!(p21[0].link_ids, vec![101]);
+    }
+
+    #[test]
+    fn extract_paths_zero_demand_skipped() {
+        let graph = two_link_network();
+        let costs = free_flow_costs(&graph);
+
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 500.0);
+
+        let paths = graph.extract_shortest_paths(&od, &costs);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].origin_zone, 1);
+        assert_eq!(paths[0].dest_zone, 2);
+    }
+
+    #[test]
+    fn extract_paths_multi_link() {
+        let graph = diamond_network();
+        let costs = free_flow_costs(&graph);
+
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 100.0);
+
+        let paths = graph.extract_shortest_paths(&od, &costs);
+
+        assert_eq!(paths.len(), 1);
+        let p = &paths[0];
+        assert_eq!(p.origin_zone, 1);
+        assert_eq!(p.dest_zone, 4);
+        assert!((p.flow - 100.0).abs() < 1e-10);
+        assert_eq!(p.link_ids, vec![100, 102]);
+        assert!(p.cost > 0.0);
+    }
+
+    #[test]
+    fn extract_paths_cost_equals_sum_of_link_costs() {
+        let graph = diamond_network();
+        let costs = free_flow_costs(&graph);
+
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 100.0);
+
+        let paths = graph.extract_shortest_paths(&od, &costs);
+
+        let p = &paths[0];
+        let expected_cost: f64 = p.link_ids.iter()
+            .map(|&lid| {
+                let idx = graph.link_idx(lid).unwrap();
+                costs[idx]
+            })
+            .sum();
+        assert!((p.cost - expected_cost).abs() < 1e-10);
+    }
+
+    #[test]
+    fn extract_paths_picks_shorter_route() {
+        let graph = diamond_network();
+        let costs = free_flow_costs(&graph);
+
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 100.0);
+
+        let paths = graph.extract_shortest_paths(&od, &costs);
+
+        let p = &paths[0];
+        assert_eq!(p.link_ids, vec![100, 102]);
     }
 }
