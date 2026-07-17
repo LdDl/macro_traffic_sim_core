@@ -6,7 +6,7 @@ This document describes how to write custom volume-delay functions (VDFs) using 
 
 The library ships three built-in VDFs: BPR, Conical (Spiess 1990), and Akcelik (1991). They cover most practical cases. When they do not - for example, a network with unusual intersection delay models, or a research formula not yet added to the core - you can supply a VDF as a Lua script instead of modifying the Rust source.
 
-E.g. the architecture is: Go HTTP API -> Intermediate gRPC ([here](https://github.com/LdDl/macro_traffic_sim_grpc)) -> Rust core. A custom expression parser would need to agree on syntax across all three layers. Lua avoids this: the formula arrives as a plain string and gets executed in the Rust core via the [mlua crate](https://crates.io/crates/mlua).
+E.g. the architecture is: UI client -> Go HTTP API -> Intermediate gRPC ([here](https://github.com/LdDl/macro_traffic_sim_grpc)) -> Rust core. A custom expression parser would need to agree on syntax across all three layers. Lua avoids this: the formula arrives as a plain string and gets executed in the Rust core via the [mlua crate](https://crates.io/crates/mlua).
 
 ## Function contract
 
