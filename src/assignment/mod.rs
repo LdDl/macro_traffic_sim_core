@@ -70,6 +70,7 @@
 //! ```
 
 mod assignment;
+pub mod diagonalization;
 pub mod error;
 pub mod frank_wolfe;
 pub mod gradient_projection;
