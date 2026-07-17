@@ -20,6 +20,8 @@ pub enum AssignmentError {
     },
     /// Invalid configuration parameter.
     InvalidConfig(String),
+    /// Lua VDF script error (requires `lua` feature).
+    LuaError(String),
 }
 
 impl fmt::Display for AssignmentError {
@@ -48,6 +50,9 @@ impl fmt::Display for AssignmentError {
             }
             AssignmentError::InvalidConfig(msg) => {
                 write!(f, "invalid config: {}", msg)
+            }
+            AssignmentError::LuaError(msg) => {
+                write!(f, "lua error: {}", msg)
             }
         }
     }

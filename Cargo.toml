@@ -14,10 +14,12 @@ categories = ["simulation", "science"]
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
+lua = ["mlua"]
 
 [dependencies]
 ordered-float = "4"
 rayon = { version = "1", optional = true }
+mlua = { version = "0.12", features = ["luajit", "vendored"], optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "registry"] }
 
@@ -45,10 +47,14 @@ path = "examples/disconnected_network/main.rs"
 name = "ring_network"
 path = "examples/ring_network/main.rs"
 
+[[example]]
+name = "lua_vdf"
+path = "examples/lua_vdf/main.rs"
+required-features = ["lua"]
+
 [dev-dependencies]
 csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
-mlua = { version = "0.12", features = ["luajit", "vendored"] }
 
 [[bench]]
 name = "assignment"
@@ -69,4 +75,5 @@ harness = false
 [[bench]]
 name = "lua_vdf"
 harness = false
+required-features = ["lua"]
 

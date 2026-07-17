@@ -129,10 +129,12 @@ All examples build an in-memory network and run without external files.
 | [`path_analysis_multi_class`](examples/path_analysis_multi_class/) | Multi-class path extraction, per-class OD/select-link |
 | [`diagonalization`](examples/diagonalization/) | Per-class VDFs (asymmetric costs), direct assignment call |
 | [`warm_start_test`](examples/warm_start_test/) | Warm start: reuse previous iteration flows |
+| [`lua_vdf`](examples/lua_vdf/) | Lua-scripted VDF with diagonalization (requires `lua` feature) |
 
 ```sh
 cargo run --example simple_network
 cargo run --example diagonalization
+cargo run --example lua_vdf --features lua
 ```
 
 ## Configuration

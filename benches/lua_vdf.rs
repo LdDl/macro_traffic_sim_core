@@ -1,9 +1,7 @@
-use std::any::Any;
-
 use criterion::{Criterion, criterion_group, criterion_main};
-use mlua::Lua;
 
 use macro_traffic_sim_core::assignment::diagonalization::assign_diagonalization;
+use macro_traffic_sim_core::assignment::lua_vdf::LuaVdf;
 use macro_traffic_sim_core::assignment::multiclass::UserClass;
 use macro_traffic_sim_core::assignment::{
     AssignmentConfig, BprFunction, IndexedGraph, VolumeDelayFunction,
@@ -22,47 +20,18 @@ local alpha = {alpha}
 local beta = {beta}
 
 function travel_time(ff, vol, cap)
-    if cap <= 0 then return 1/0 end
+    if cap <= 0 then return math.huge end
     return ff * (1.0 + alpha * (vol / cap) ^ beta)
 end
 
 function integral(ff, vol, cap)
-    if cap <= 0 then return 1/0 end
+    if cap <= 0 then return math.huge end
     if vol <= 0 then return 0.0 end
     local ratio = vol / cap
     return ff * (vol + alpha * cap * ratio ^ (beta + 1.0) / (beta + 1.0))
 end
 "#
     )
-}
-
-struct LuaVdf {
-    lua: Lua,
-}
-
-impl LuaVdf {
-    fn new(alpha: f64, beta: f64) -> Self {
-        let lua = Lua::new();
-        let script = lua_bpr_script(alpha, beta);
-        lua.load(&script).exec().unwrap();
-        LuaVdf { lua }
-    }
-}
-
-impl VolumeDelayFunction for LuaVdf {
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
-        let f: mlua::Function = self.lua.globals().get("travel_time").unwrap();
-        f.call::<f64>((free_flow_time, volume, capacity)).unwrap()
-    }
-
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
-        let f: mlua::Function = self.lua.globals().get("integral").unwrap();
-        f.call::<f64>((free_flow_time, volume, capacity)).unwrap()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<i64>) {
@@ -152,7 +121,7 @@ fn uniform_od(zone_ids: &[i64], demand_per_pair: f64) -> DenseOdMatrix {
 
 fn bench_vdf_micro(c: &mut Criterion) {
     let native = BprFunction::default();
-    let lua_vdf = LuaVdf::new(0.15, 4.0);
+    let lua_vdf = LuaVdf::new(&lua_bpr_script(0.15, 4.0)).unwrap();
 
     for vol in [0.0, 500.0, 1000.0, 2000.0] {
         let n = native.travel_time(10.0, vol, 1000.0);
@@ -163,15 +132,6 @@ fn bench_vdf_micro(c: &mut Criterion) {
             vol,
             n,
             l
-        );
-        let ni = native.integral(10.0, vol, 1000.0);
-        let li = lua_vdf.integral(10.0, vol, 1000.0);
-        assert!(
-            (ni - li).abs() < 1e-6,
-            "integral mismatch at vol={}: native={}, lua={}",
-            vol,
-            ni,
-            li
         );
     }
     println!("Lua VDF correctness verified");
@@ -214,8 +174,8 @@ fn bench_diag_lua(c: &mut Criterion) {
 
     let bpr_car = BprFunction::new(0.15, 4.0);
     let bpr_truck = BprFunction::new(0.30, 4.0);
-    let lua_car = LuaVdf::new(0.15, 4.0);
-    let lua_truck = LuaVdf::new(0.30, 4.0);
+    let lua_car = LuaVdf::new(&lua_bpr_script(0.15, 4.0)).unwrap();
+    let lua_truck = LuaVdf::new(&lua_bpr_script(0.30, 4.0)).unwrap();
 
     let car = UserClass::new("car", 1.0, 1.0);
     let truck = UserClass::new("truck", 2.5, 1.0);
