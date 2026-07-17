@@ -110,6 +110,7 @@ pub fn assign_diagonalization(
     let mut costs = vec![0.0; n];
     let mut aux = vec![0.0; n];
     let mut background_pcu = vec![0.0; n];
+    let mut running_pcu = vec![0.0; n];
 
     // Cold start: AON for each class at free-flow
     for ci in 0..m {
@@ -138,20 +139,26 @@ pub fn assign_diagonalization(
     for outer in 0..max_outer_iterations {
         outer_iteration = outer + 1;
 
+        // Running PCU total across all classes (rebuilt each outer iteration)
+        running_pcu.fill(0.0);
         for ci in 0..m {
-            compute_background_pcu(
-                &class_volumes,
-                classes,
-                ci,
-                n,
-                &mut background_pcu,
-            );
+            let p = classes[ci].pcu;
+            for i in 0..n {
+                running_pcu[i] += class_volumes[ci][i] * p;
+            }
+        }
+
+        for ci in 0..m {
+            let p = classes[ci].pcu;
+            for i in 0..n {
+                background_pcu[i] = running_pcu[i] - class_volumes[ci][i] * p;
+            }
 
             let inner_iters = inner_fw(
                 graph,
                 od_matrices[ci],
                 class_vdfs[ci],
-                classes[ci].pcu,
+                p,
                 classes[ci].ff_time_multiplier,
                 &background_pcu,
                 &mut class_volumes[ci],
@@ -160,6 +167,11 @@ pub fn assign_diagonalization(
                 &mut aux,
             );
             total_inner_iterations += inner_iters;
+
+            // Update running total with new class volumes
+            for i in 0..n {
+                running_pcu[i] = background_pcu[i] + class_volumes[ci][i] * p;
+            }
         }
 
         outer_gap = max_relative_change(&prev_class_volumes, &class_volumes, n);
@@ -290,26 +302,6 @@ fn compute_class_costs(
         let total_vol = background_pcu[i] + class_volumes[i] * pcu;
         out[i] = ff_time_multiplier
             * vdf.travel_time(graph.link_ff_time[i], total_vol, graph.link_capacity[i]);
-    }
-}
-
-/// Background PCU from all classes except `skip_ci` (Gauss-Seidel).
-fn compute_background_pcu(
-    class_volumes: &[Vec<f64>],
-    classes: &[UserClass],
-    skip_ci: usize,
-    n: usize,
-    out: &mut [f64],
-) {
-    out.fill(0.0);
-    for (ci, vols) in class_volumes.iter().enumerate() {
-        if ci == skip_ci {
-            continue;
-        }
-        let pcu = classes[ci].pcu;
-        for i in 0..n {
-            out[i] += vols[i] * pcu;
-        }
     }
 }
 
