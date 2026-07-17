@@ -75,6 +75,8 @@ pub mod error;
 pub mod frank_wolfe;
 pub mod gradient_projection;
 pub mod indexed_graph;
+#[cfg(feature = "lua")]
+pub mod lua_vdf;
 pub mod msa;
 pub mod multiclass;
 pub mod od_path;

@@ -129,10 +129,12 @@ All examples build an in-memory network and run without external files.
 | [`path_analysis_multi_class`](examples/path_analysis_multi_class/) | Multi-class path extraction, per-class OD/select-link |
 | [`diagonalization`](examples/diagonalization/) | Per-class VDFs (asymmetric costs), direct assignment call |
 | [`warm_start_test`](examples/warm_start_test/) | Warm start: reuse previous iteration flows |
+| [`lua_vdf`](examples/lua_vdf/) | Lua-scripted VDF with diagonalization (requires `lua` feature) |
 
 ```sh
 cargo run --example simple_network
 cargo run --example diagonalization
+cargo run --example lua_vdf --features lua
 ```
 
 ## Configuration
@@ -333,7 +335,18 @@ macro_traffic_sim_core = { version = "...", default-features = false }
    DOI: 10.1080/21680566.2014.937788
    DTA warm start reference (for future works).
 
-10. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+10. Spiess, H. (1990) "Conical Volume-Delay Functions",
+    Transportation Science, 24(2), 153-158.
+    DOI: 10.1287/trsc.24.2.153
+    Conical VDF.
+
+11. Akcelik, R. (1991) "Travel time functions for transport planning
+    purposes: Davidson's function, its time-dependent form and an
+    alternative travel time function",
+    Australian Road Research, 21(3), 49-59.
+    Akcelik VDF for signalized intersections.
+
+12. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
 
 ## License
 
