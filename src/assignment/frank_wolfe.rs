@@ -226,6 +226,12 @@ impl AssignmentMethod for FrankWolfe {
             converged = converged
         );
 
+        let path_flows = if config.store_paths {
+            Some(graph.extract_shortest_paths(od_matrix, &costs))
+        } else {
+            None
+        };
+
         Ok(AssignmentResult {
             link_volumes: graph.volumes_to_hashmap(&volumes),
             link_costs: graph.costs_to_hashmap(&costs),
@@ -233,6 +239,7 @@ impl AssignmentMethod for FrankWolfe {
             relative_gap,
             converged,
             class_volumes: None,
+            path_flows,
         })
     }
 }

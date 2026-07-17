@@ -32,10 +32,26 @@
 //! computational cost is substantially higher. We do not implement this.
 //!
 //! Ref:
-//! Dafermos, S.C. (1972) "The Traffic Assignment Problem for
+//! 1. Dafermos, S.C. (1972) "The Traffic Assignment Problem for
 //! Multiclass-User Transportation Networks",
 //! Transportation Science, 6(1), 73-87.
 //! DOI: 10.1287/trsc.6.1.73
+//! 2. Dafermos, S.C. (1982) "Relaxation Algorithms for the General
+//! Asymmetric Traffic Equilibrium Problem",
+//! Transportation Science, 16(2), 231-240.
+//! DOI: 10.1287/trsc.16.2.231
+//! Diagonalization for class-specific VDFs (NOT implemented due model limitations).
+//! 
+//! Model limitations are:
+//! * All classes share the same link cost `t_a(V_a)``, computed on PCU-total volume.
+//! * Per-class cost is a scalar multiple: `c_a^m = ff_mult_m * t_a(V_a)`.
+//! * Classes differ in volumes (demand split + PCU weight), not in per-link costs.
+//! * This guarantees a shared SPT across all classes.
+//! Per-link-per-class costs (truck bans, class-specific tolls,
+//! class-specific VDFs) require a different formulation (variational
+//! inequality) and a different solver (e.g. diagonalization with
+//! FW/MSA as inner solver). This can be added as a separate
+//! assignment method without modifying the existing ones.
 
 use std::collections::HashMap;
 
@@ -186,9 +202,11 @@ pub fn assign_multiclass_fw(
     Ok(build_result(
         graph,
         classes,
+        od_matrices,
         &class_volumes,
         &pcu_total,
         &shared_costs,
+        config,
         iteration,
         relative_gap,
         converged,
@@ -292,9 +310,11 @@ pub fn assign_multiclass_msa(
     Ok(build_result(
         graph,
         classes,
+        od_matrices,
         &class_volumes,
         &pcu_total,
         &shared_costs,
+        config,
         iteration,
         relative_gap,
         converged,
@@ -452,9 +472,11 @@ fn eval_beckmann_at_step(
 fn build_result(
     graph: &IndexedGraph,
     classes: &[UserClass],
+    od_matrices: &[&dyn OdMatrix],
     class_volumes: &[Vec<f64>],
     pcu_total: &[f64],
     shared_costs: &[f64],
+    config: &AssignmentConfig,
     iterations: usize,
     relative_gap: f64,
     converged: bool,
@@ -467,6 +489,17 @@ fn build_result(
         );
     }
 
+    let path_flows = if config.store_paths {
+        let multipliers: Vec<f64> = classes.iter().map(|c| c.ff_time_multiplier).collect();
+        Some(graph.extract_shortest_paths_multiclass(
+            od_matrices,
+            &multipliers,
+            shared_costs,
+        ))
+    } else {
+        None
+    };
+
     AssignmentResult {
         link_volumes: graph.volumes_to_hashmap(pcu_total),
         link_costs: graph.costs_to_hashmap(shared_costs),
@@ -474,6 +507,7 @@ fn build_result(
         relative_gap,
         converged,
         class_volumes: Some(cv),
+        path_flows,
     }
 }
 
@@ -521,6 +555,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut od = DenseOdMatrix::new(vec![1, 2]);
@@ -549,6 +584,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);
@@ -579,6 +615,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);
@@ -611,6 +648,7 @@ mod tests {
         let config = AssignmentConfig {
             max_iterations: 200,
             convergence_gap: 1e-3,
+            store_paths: false,
         };
 
         let mut car_od = DenseOdMatrix::new(vec![1, 2]);
@@ -677,5 +715,101 @@ mod tests {
 
         let err = assign_multiclass_fw(&graph, &classes, &od_refs, &bpr, &config, None);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn store_paths_multiclass_fw() {
+        let (_net, graph) = two_link_network();
+        let bpr = BprFunction::default();
+        let config = AssignmentConfig {
+            max_iterations: 100,
+            convergence_gap: 1e-4,
+            store_paths: true,
+        };
+
+        let mut car_od = DenseOdMatrix::new(vec![1, 2]);
+        car_od.set(1, 2, 400.0);
+        let mut truck_od = DenseOdMatrix::new(vec![1, 2]);
+        truck_od.set(1, 2, 100.0);
+
+        let classes = vec![UserClass::car(), UserClass::truck()];
+        let od_refs: Vec<&dyn OdMatrix> = vec![&car_od, &truck_od];
+        let result = assign_multiclass_fw(&graph, &classes, &od_refs, &bpr, &config, None).unwrap();
+
+        let paths = result.path_flows.as_ref().expect("paths should be Some");
+        assert_eq!(paths.len(), 2);
+
+        let car_paths: Vec<_> = paths.iter()
+            .filter(|p| p.class_index == Some(0))
+            .collect();
+        assert_eq!(car_paths.len(), 1);
+        assert!((car_paths[0].flow - 400.0).abs() < EPS);
+        assert_eq!(car_paths[0].link_ids, vec![100]);
+
+        let truck_paths: Vec<_> = paths.iter()
+            .filter(|p| p.class_index == Some(1))
+            .collect();
+        assert_eq!(truck_paths.len(), 1);
+        assert!((truck_paths[0].flow - 100.0).abs() < EPS);
+        assert_eq!(truck_paths[0].link_ids, vec![100]);
+
+        // Truck cost > car cost (ff_time_multiplier 2.5 vs 1.0)
+        assert!(truck_paths[0].cost > car_paths[0].cost);
+        assert!((truck_paths[0].cost / car_paths[0].cost - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn store_paths_multiclass_msa() {
+        let (_net, graph) = two_link_network();
+        let bpr = BprFunction::default();
+        let config = AssignmentConfig {
+            max_iterations: 200,
+            convergence_gap: 1e-3,
+            store_paths: true,
+        };
+
+        let mut car_od = DenseOdMatrix::new(vec![1, 2]);
+        car_od.set(1, 2, 400.0);
+        let mut truck_od = DenseOdMatrix::new(vec![1, 2]);
+        truck_od.set(1, 2, 100.0);
+
+        let classes = vec![UserClass::car(), UserClass::truck()];
+        let od_refs: Vec<&dyn OdMatrix> = vec![&car_od, &truck_od];
+        let result =
+            assign_multiclass_msa(&graph, &classes, &od_refs, &bpr, &config, None).unwrap();
+
+        let paths = result.path_flows.as_ref().expect("paths should be Some");
+        assert_eq!(paths.len(), 2);
+
+        let car_flow: f64 = paths.iter()
+            .filter(|p| p.class_index == Some(0))
+            .map(|p| p.flow)
+            .sum();
+        let truck_flow: f64 = paths.iter()
+            .filter(|p| p.class_index == Some(1))
+            .map(|p| p.flow)
+            .sum();
+        assert!((car_flow - 400.0).abs() < EPS);
+        assert!((truck_flow - 100.0).abs() < EPS);
+    }
+
+    #[test]
+    fn store_paths_false_multiclass() {
+        let (_net, graph) = two_link_network();
+        let bpr = BprFunction::default();
+        let config = AssignmentConfig {
+            max_iterations: 100,
+            convergence_gap: 1e-4,
+            store_paths: false,
+        };
+
+        let mut car_od = DenseOdMatrix::new(vec![1, 2]);
+        car_od.set(1, 2, 400.0);
+
+        let classes = vec![UserClass::car()];
+        let od_refs: Vec<&dyn OdMatrix> = vec![&car_od];
+        let result = assign_multiclass_fw(&graph, &classes, &od_refs, &bpr, &config, None).unwrap();
+
+        assert!(result.path_flows.is_none());
     }
 }

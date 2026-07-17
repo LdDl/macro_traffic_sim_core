@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
+use super::od_path::OdPath;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::LinkID;
 use crate::od::OdMatrix;
@@ -385,6 +386,7 @@ impl VolumeDelayFunction for AkcelikDelayFunction {
 /// let config = AssignmentConfig {
 ///     max_iterations: 500,
 ///     convergence_gap: 1e-6,
+///     store_paths: false,
 /// };
 /// assert_eq!(config.max_iterations, 500);
 /// ```
@@ -394,6 +396,12 @@ pub struct AssignmentConfig {
     pub max_iterations: usize,
     /// Convergence threshold for relative gap.
     pub convergence_gap: f64,
+    /// Store per-OD paths in the result.
+    /// When true, [`AssignmentResult::path_flows`] is populated.
+    /// GP: multiple paths per OD pair with flow distribution (native).
+    /// FW/MSA: one shortest path per OD pair from final costs (post-processing).
+    /// Default: false.
+    pub store_paths: bool,
 }
 
 impl Default for AssignmentConfig {
@@ -401,6 +409,7 @@ impl Default for AssignmentConfig {
         AssignmentConfig {
             max_iterations: 100,
             convergence_gap: 1e-4,
+            store_paths: false,
         }
     }
 }
@@ -426,6 +435,9 @@ pub struct AssignmentResult {
     /// `None` for single-class assignment.
     /// Key is the class name from [`multiclass::UserClass`].
     pub class_volumes: Option<HashMap<String, HashMap<LinkID, f64>>>,
+    /// Per-OD paths with flows.
+    /// `None` when `store_paths` is false.
+    pub path_flows: Option<Vec<OdPath>>,
 }
 
 /// Trait for traffic assignment methods.
@@ -862,4 +874,5 @@ mod tests {
         let i = a.integral(10.0, 500.0, 1000.0);
         assert!((i - 10.0 * 500.0).abs() < EPS);
     }
+
 }
