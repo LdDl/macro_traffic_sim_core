@@ -2,6 +2,7 @@
 //!
 //! Multi-class traffic assignment with per-class volume-delay
 //! functions using the Gauss-Seidel relaxation method.
+//! See the ref: https://en.wikipedia.org/wiki/Gauss%E2%80%93Seidel_method
 //!
 //! Unlike the Beckmann-based multi-class FW/MSA (which requires
 //! `ff_time_multiplier / pcu = const`), diagonalization supports
