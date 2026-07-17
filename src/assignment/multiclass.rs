@@ -32,10 +32,26 @@
 //! computational cost is substantially higher. We do not implement this.
 //!
 //! Ref:
-//! Dafermos, S.C. (1972) "The Traffic Assignment Problem for
+//! 1. Dafermos, S.C. (1972) "The Traffic Assignment Problem for
 //! Multiclass-User Transportation Networks",
 //! Transportation Science, 6(1), 73-87.
 //! DOI: 10.1287/trsc.6.1.73
+//! 2. Dafermos, S.C. (1982) "Relaxation Algorithms for the General
+//! Asymmetric Traffic Equilibrium Problem",
+//! Transportation Science, 16(2), 231-240.
+//! DOI: 10.1287/trsc.16.2.231
+//! Diagonalization for class-specific VDFs (NOT implemented due model limitations).
+//! 
+//! Model limitations are:
+//! * All classes share the same link cost `t_a(V_a)``, computed on PCU-total volume.
+//! * Per-class cost is a scalar multiple: `c_a^m = ff_mult_m * t_a(V_a)`.
+//! * Classes differ in volumes (demand split + PCU weight), not in per-link costs.
+//! * This guarantees a shared SPT across all classes.
+//! Per-link-per-class costs (truck bans, class-specific tolls,
+//! class-specific VDFs) require a different formulation (variational
+//! inequality) and a different solver (e.g. diagonalization with
+//! FW/MSA as inner solver). This can be added as a separate
+//! assignment method without modifying the existing ones.
 
 use std::collections::HashMap;
 

@@ -369,7 +369,7 @@ fn bench_grid_city(c: &mut Criterion) {
 }
 
 // Large generated grid: grid_side x grid_side nodes, every zone_step-th node is a zone centroid.
-// grid_side=50, zone_step=2 => 625 zones, ~5000 links
+// grid_side=50, zone_step=2 => 625 zones, ~5000 links which gives about 10000 edges
 fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<Zone>) {
     let mut net = Network::new();
     let mut link_id: i64 = 1;

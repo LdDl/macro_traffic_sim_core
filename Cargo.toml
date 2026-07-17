@@ -57,3 +57,7 @@ harness = false
 name = "furness"
 harness = false
 
+[[bench]]
+name = "store_paths"
+harness = false
+
