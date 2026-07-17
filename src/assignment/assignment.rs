@@ -3,6 +3,7 @@
 //! Volume-delay functions, traits, configuration, and helper functions
 //! for traffic assignment algorithms.
 
+use std::any::Any;
 use std::collections::HashMap;
 
 use super::error::AssignmentError;
@@ -40,6 +41,13 @@ pub trait VolumeDelayFunction {
     /// Compute the integral of the VDF from 0 to volume.
     /// Needed for the Beckmann objective function in Frank-Wolfe.
     fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64;
+
+    /// Downcast support for enum-based dispatch in diagonalization.
+    ///
+    /// Built-in VDFs (BPR, Conical, Akcelik) are recognized by
+    /// `VdfDispatch` and inlined via match. Custom implementations
+    /// fall back to vtable dispatch automatically.
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// BPR (Bureau of Public Roads) volume-delay function.
@@ -165,6 +173,10 @@ impl VolumeDelayFunction for BprFunction {
         free_flow_time
             * (volume + self.alpha * capacity * self.ratio_pow_plus1(ratio) / (self.beta + 1.0))
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Conical volume-delay function (Spiess, 1990).
@@ -262,6 +274,10 @@ impl VolumeDelayFunction for ConicalDelayFunction {
             * ((2.0 - a - b) * volume
                 + a * volume * volume / (2.0 * c)
                 + c * (g(1.0) - g(1.0 - volume / c)))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -364,6 +380,10 @@ impl VolumeDelayFunction for AkcelikDelayFunction {
         };
 
         capacity * (free_flow_time * r + d / 4.0 * (r * r / 2.0 - r + h(r) - h(0.0)))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

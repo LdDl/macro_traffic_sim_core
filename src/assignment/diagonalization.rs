@@ -61,7 +61,10 @@ use super::error::AssignmentError;
 use super::indexed_graph::IndexedGraph;
 use super::multiclass::UserClass;
 use super::od_path::OdPath;
-use super::{AssignmentConfig, AssignmentResult, VolumeDelayFunction};
+use super::{
+    AkcelikDelayFunction, AssignmentConfig, AssignmentResult, BprFunction,
+    ConicalDelayFunction, VolumeDelayFunction,
+};
 use crate::log_additional;
 use crate::log_main;
 use crate::od::OdMatrix;
@@ -69,6 +72,58 @@ use crate::verbose::{EVENT_ASSIGNMENT, EVENT_ASSIGNMENT_ITERATION, EVENT_CONVERG
 
 const INV_PHI: f64 = 0.618_033_988_749_895;
 const TOL: f64 = 1e-8;
+
+/// Enum dispatch for built-in VDFs: avoids vtable overhead in the
+/// inner FW loop by letting the compiler inline travel_time/integral.
+///
+/// To add a new built-in VDF:
+/// 1. Add a variant here.
+/// 2. Add a downcast branch in `from_dyn`.
+/// 3. Add match arms in `travel_time` and `integral`.
+///
+/// Custom VDFs (including Lua) fall through to `Custom` and use
+/// normal vtable dispatch - no performance loss vs the old code.
+enum VdfDispatch<'a> {
+    Bpr(BprFunction),
+    Conical(ConicalDelayFunction),
+    Akcelik(AkcelikDelayFunction),
+    Custom(&'a dyn VolumeDelayFunction),
+}
+
+impl VdfDispatch<'_> {
+    fn from_dyn<'a>(vdf: &'a dyn VolumeDelayFunction) -> VdfDispatch<'a> {
+        let any = vdf.as_any();
+        if let Some(bpr) = any.downcast_ref::<BprFunction>() {
+            VdfDispatch::Bpr(*bpr)
+        } else if let Some(con) = any.downcast_ref::<ConicalDelayFunction>() {
+            VdfDispatch::Conical(*con)
+        } else if let Some(akc) = any.downcast_ref::<AkcelikDelayFunction>() {
+            VdfDispatch::Akcelik(*akc)
+        } else {
+            VdfDispatch::Custom(vdf)
+        }
+    }
+
+    #[inline]
+    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        match self {
+            VdfDispatch::Bpr(v) => v.travel_time(free_flow_time, volume, capacity),
+            VdfDispatch::Conical(v) => v.travel_time(free_flow_time, volume, capacity),
+            VdfDispatch::Akcelik(v) => v.travel_time(free_flow_time, volume, capacity),
+            VdfDispatch::Custom(v) => v.travel_time(free_flow_time, volume, capacity),
+        }
+    }
+
+    #[inline]
+    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+        match self {
+            VdfDispatch::Bpr(v) => v.integral(free_flow_time, volume, capacity),
+            VdfDispatch::Conical(v) => v.integral(free_flow_time, volume, capacity),
+            VdfDispatch::Akcelik(v) => v.integral(free_flow_time, volume, capacity),
+            VdfDispatch::Custom(v) => v.integral(free_flow_time, volume, capacity),
+        }
+    }
+}
 
 /// Diagonalization multi-class assignment.
 ///
@@ -106,6 +161,8 @@ pub fn assign_diagonalization(
     let n = graph.num_links;
     let m = classes.len();
 
+    let dispatched: Vec<VdfDispatch> = class_vdfs.iter().map(|v| VdfDispatch::from_dyn(*v)).collect();
+
     let mut class_volumes: Vec<Vec<f64>> = vec![vec![0.0; n]; m];
     let mut costs = vec![0.0; n];
     let mut aux = vec![0.0; n];
@@ -120,7 +177,7 @@ pub fn assign_diagonalization(
             classes[ci].pcu,
             classes[ci].ff_time_multiplier,
             &background_pcu,
-            class_vdfs[ci],
+            &dispatched[ci],
             &mut costs,
         );
         #[cfg(feature = "parallel")]
@@ -157,7 +214,7 @@ pub fn assign_diagonalization(
             let inner_iters = inner_fw(
                 graph,
                 od_matrices[ci],
-                class_vdfs[ci],
+                &dispatched[ci],
                 p,
                 classes[ci].ff_time_multiplier,
                 &background_pcu,
@@ -228,7 +285,7 @@ pub fn assign_diagonalization(
 fn inner_fw(
     graph: &IndexedGraph,
     od_matrix: &dyn OdMatrix,
-    vdf: &dyn VolumeDelayFunction,
+    vdf: &VdfDispatch,
     pcu: f64,
     ff_time_multiplier: f64,
     background_pcu: &[f64],
@@ -295,7 +352,7 @@ fn compute_class_costs(
     pcu: f64,
     ff_time_multiplier: f64,
     background_pcu: &[f64],
-    vdf: &dyn VolumeDelayFunction,
+    vdf: &VdfDispatch,
     out: &mut [f64],
 ) {
     for i in 0..graph.num_links {
@@ -327,7 +384,7 @@ fn line_search_with_background(
     aux_vols: &[f64],
     pcu: f64,
     background_pcu: &[f64],
-    vdf: &dyn VolumeDelayFunction,
+    vdf: &VdfDispatch,
 ) -> f64 {
     let eval = |lambda: f64| -> f64 {
         let mut objective = 0.0;
