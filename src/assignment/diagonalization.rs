@@ -110,7 +110,6 @@ pub fn assign_diagonalization(
     let mut costs = vec![0.0; n];
     let mut aux = vec![0.0; n];
     let mut background_pcu = vec![0.0; n];
-    let mut total_pcu = vec![0.0; n];
 
     // Cold start: AON for each class at free-flow
     for ci in 0..m {
@@ -119,7 +118,7 @@ pub fn assign_diagonalization(
             &class_volumes[ci],
             classes[ci].pcu,
             classes[ci].ff_time_multiplier,
-            &vec![0.0; n],
+            &background_pcu,
             class_vdfs[ci],
             &mut costs,
         );
@@ -159,7 +158,6 @@ pub fn assign_diagonalization(
                 config,
                 &mut costs,
                 &mut aux,
-                &mut total_pcu,
             );
             total_inner_iterations += inner_iters;
         }
@@ -226,7 +224,6 @@ fn inner_fw(
     config: &AssignmentConfig,
     costs: &mut [f64],
     aux: &mut [f64],
-    total_pcu: &mut [f64],
 ) -> usize {
     let n = graph.num_links;
     let mut iteration = 0;
@@ -249,16 +246,19 @@ fn inner_fw(
         #[cfg(not(feature = "parallel"))]
         graph.all_or_nothing(od_matrix, costs, aux);
 
-        // Build PCU totals for current and auxiliary
+        let mut numerator = 0.0;
+        let mut denominator = 0.0;
         for i in 0..n {
-            total_pcu[i] = background_pcu[i] + class_volumes[i] * pcu;
+            let current_pcu = background_pcu[i] + class_volumes[i] * pcu;
+            let aux_pcu = background_pcu[i] + aux[i] * pcu;
+            numerator += current_pcu * costs[i];
+            denominator += aux_pcu * costs[i];
         }
-        let mut aux_pcu = vec![0.0; n];
-        for i in 0..n {
-            aux_pcu[i] = background_pcu[i] + aux[i] * pcu;
-        }
-
-        let gap = graph.relative_gap(total_pcu, costs, &aux_pcu);
+        let gap = if numerator > 0.0 {
+            (numerator - denominator) / numerator
+        } else {
+            0.0
+        };
 
         if gap.abs() < config.convergence_gap {
             break;
@@ -549,24 +549,24 @@ fn extract_paths_per_class(
                     continue;
                 }
 
-                let mut link_indices = Vec::new();
+                let mut link_ids = Vec::new();
+                let mut path_cost = 0.0;
                 let mut current = dest_idx;
                 loop {
                     match pred[current] {
                         Some(li) => {
-                            link_indices.push(li);
+                            link_ids.push(graph.link_id(li));
+                            path_cost += costs[li];
                             current = graph.link_source(li);
                         }
                         None => break,
                     }
                 }
-                link_indices.reverse();
+                link_ids.reverse();
 
-                if link_indices.is_empty() {
+                if link_ids.is_empty() {
                     continue;
                 }
-
-                let path_cost: f64 = link_indices.iter().map(|&li| costs[li]).sum();
 
                 paths.push(OdPath {
                     origin_zone,
@@ -574,10 +574,7 @@ fn extract_paths_per_class(
                     path_index: 0,
                     flow: demand,
                     cost: path_cost,
-                    link_ids: link_indices
-                        .iter()
-                        .map(|&li| graph.link_id(li))
-                        .collect(),
+                    link_ids,
                     class_index: Some(ci as u16),
                 });
             }
