@@ -245,6 +245,36 @@ every OD pair, consistent with the 10%/90% demand split.
 
 ---
 
+## Benchmark results
+
+Grid 50x50: 625 zones, 2500 nodes, 4900 edges (9800 links, 2 per edge).
+FW, max 20 iterations, gap=1e-3, 1 feedback iteration.
+
+### Time
+
+| Variant | Without paths | With paths | Overhead |
+|---------|---------------|------------|----------|
+| Single-class | 729 ms | 1022 ms | **+40%** |
+| Multi-class (2 classes) | 1056 ms | 1499 ms | **+42%** |
+
+Overhead is one Dijkstra per origin (625 runs) after convergence.
+Multi-class does not add extra Dijkstra runs (shared SPT) - same ~40% overhead as single-class.
+
+### Memory
+
+| Variant | Paths | sizeof(OdPath) | Structs | Heap (link_ids) | Total |
+|---------|-------|----------------|---------|-----------------|-------|
+| Single-class | 390,000 | 64 B | 23.8 MB | 99.3 MB | **123.1 MB** |
+| Multi-class (2 cls) | 780,000 | 64 B | 47.6 MB | 199.3 MB | **246.9 MB** |
+
+Avg 33.4 links/path. Heap dominates (80%): `Vec<LinkID>` contents (33.4 * 8 B = 267 B/path on heap vs 64 B struct inline).
+Multi-class is x2 paths (one per class), no extra per-struct overhead thanks to `Option<u16>` (vs `Option<String>` which would add 24 B/path).
+
+See also: [`path_analysis_single_class`](../path_analysis_single_class/README.md) for single-class benchmarks,
+[`diagonalization`](../diagonalization/README.md) for per-class VDF benchmarks.
+
+---
+
 ## Difference from simple_network
 
 Two extra lines in the config builder:

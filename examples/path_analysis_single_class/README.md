@@ -201,6 +201,31 @@ or new route alternatives).
 
 ---
 
+## Benchmark results
+
+Grid 50x50: 625 zones, 2500 nodes, 4900 edges (9800 links, 2 per edge).
+FW, max 20 iterations, gap=1e-3, 1 feedback iteration.
+
+### Time
+
+| Variant | Without paths | With paths | Overhead |
+|---------|---------------|------------|----------|
+| Single-class | 729 ms | 1022 ms | **+40%** |
+
+Overhead is one Dijkstra per origin (625 runs) after convergence.
+
+### Memory
+
+| Variant | Paths | sizeof(OdPath) | Structs | Heap (link_ids) | Total |
+|---------|-------|----------------|---------|-----------------|-------|
+| Single-class | 390,000 | 64 B | 23.8 MB | 99.3 MB | **123.1 MB** |
+
+Avg 33.4 links/path. Heap dominates (80%): `Vec<LinkID>` contents (33.4 * 8 B = 267 B/path on heap vs 64 B struct inline).
+
+See also: [`path_analysis_multi_class`](../path_analysis_multi_class/README.md) for multi-class benchmarks on the same grid.
+
+---
+
 ## Difference from simple_network
 
 The **only code difference** is in the config builder:
