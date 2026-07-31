@@ -17,6 +17,8 @@ parallel = ["rayon"]
 lua = ["mlua"]
 
 [dependencies]
+gtfs-rs = { version = "0.1.0" }
+hyperpaths-rs = { version = "0.1.0" }
 ordered-float = "4"
 rayon = { version = "1", optional = true }
 mlua = { version = "0.12", features = ["luajit", "vendored"], optional = true }
@@ -51,6 +53,14 @@ path = "examples/ring_network/main.rs"
 name = "lua_vdf"
 path = "examples/lua_vdf/main.rs"
 required-features = ["lua"]
+
+[[example]]
+name = "transit"
+path = "examples/transit/main.rs"
+
+[[example]]
+name = "transit_gtfs"
+path = "examples/transit_gtfs/main.rs"
 
 [dev-dependencies]
 csv = "1"
