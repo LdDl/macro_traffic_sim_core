@@ -336,7 +336,10 @@ impl IndexedGraph {
                     path_index: 0,
                     flow: demand,
                     cost,
-                    link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                    link_ids: link_indices
+                        .iter()
+                        .map(|&li| self.idx_to_link[li])
+                        .collect(),
                     class_index: None,
                 });
             }
@@ -590,7 +593,10 @@ impl IndexedGraph {
                     path_index: 0,
                     flow: demand,
                     cost,
-                    link_ids: link_indices.iter().map(|&li| self.idx_to_link[li]).collect(),
+                    link_ids: link_indices
+                        .iter()
+                        .map(|&li| self.idx_to_link[li])
+                        .collect(),
                     class_index: None,
                 });
             }
@@ -602,7 +608,7 @@ impl IndexedGraph {
     /// Extract shortest paths for multi-class assignment.
     ///
     /// Under the Beckmann symmetry condition (`ff_time_multiplier / pcu
-    /// = const`), per-class cost is `ff_time_multiplier_m * t_a(V_a)` - 
+    /// = const`), per-class cost is `ff_time_multiplier_m * t_a(V_a)` -
     /// a constant multiple of shared cost. Multiplying all edge
     /// weights by a positive constant does not change the shortest path
     /// tree, so all classes share the same SPT.
@@ -622,8 +628,10 @@ impl IndexedGraph {
     ) -> Vec<OdPath> {
         let m = od_matrices.len();
         let all_zone_ids = self.zone_ids().to_vec();
-        let zone_node_idxs: Vec<Option<usize>> =
-            all_zone_ids.iter().map(|&z| self.zone_node_idx(z)).collect();
+        let zone_node_idxs: Vec<Option<usize>> = all_zone_ids
+            .iter()
+            .map(|&z| self.zone_node_idx(z))
+            .collect();
 
         let mut result = Vec::new();
         let mut dij_dist = vec![f64::INFINITY; self.num_nodes];
@@ -687,8 +695,10 @@ impl IndexedGraph {
                 }
 
                 let base_cost: f64 = link_indices.iter().map(|&li| shared_costs[li]).sum();
-                let link_ids: Vec<LinkID> =
-                    link_indices.iter().map(|&li| self.idx_to_link[li]).collect();
+                let link_ids: Vec<LinkID> = link_indices
+                    .iter()
+                    .map(|&li| self.idx_to_link[li])
+                    .collect();
 
                 for ci in 0..m {
                     let demand = od_matrices[ci].get(origin_zone, dest_zone);
@@ -766,27 +776,101 @@ mod tests {
 
     fn two_link_network() -> IndexedGraph {
         let mut net = Network::new();
-        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build()).unwrap();
-        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(0.0, 1.0).build()).unwrap();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(0.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(0.0, 1.0)
+                .build(),
+        )
+        .unwrap();
         net.add_link(
-            Link::new(100, 1, 2).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build(),
-        ).unwrap();
+            Link::new(100, 1, 2)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
         net.add_link(
-            Link::new(101, 2, 1).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build(),
-        ).unwrap();
+            Link::new(101, 2, 1)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
         IndexedGraph::from_network(&net)
     }
 
     fn diamond_network() -> IndexedGraph {
         let mut net = Network::new();
-        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build()).unwrap();
-        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(1.0, 0.0).build()).unwrap();
-        net.add_node(Node::new(3).with_zone_id(3).with_coordinates(0.0, 1.0).build()).unwrap();
-        net.add_node(Node::new(4).with_zone_id(4).with_coordinates(1.0, 1.0).build()).unwrap();
-        net.add_link(Link::new(100, 1, 2).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
-        net.add_link(Link::new(101, 1, 3).with_length_meters(2000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
-        net.add_link(Link::new(102, 2, 4).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
-        net.add_link(Link::new(103, 3, 4).with_length_meters(1000.0).with_free_speed(60.0).with_capacity(1000.0).build()).unwrap();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(0.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(1.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(3)
+                .with_zone_id(3)
+                .with_coordinates(0.0, 1.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(4)
+                .with_zone_id(4)
+                .with_coordinates(1.0, 1.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(100, 1, 2)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(101, 1, 3)
+                .with_length_meters(2000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(102, 2, 4)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(103, 3, 4)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1000.0)
+                .build(),
+        )
+        .unwrap();
         IndexedGraph::from_network(&net)
     }
 
@@ -810,13 +894,19 @@ mod tests {
 
         assert_eq!(paths.len(), 2);
 
-        let p12: Vec<_> = paths.iter().filter(|p| p.origin_zone == 1 && p.dest_zone == 2).collect();
+        let p12: Vec<_> = paths
+            .iter()
+            .filter(|p| p.origin_zone == 1 && p.dest_zone == 2)
+            .collect();
         assert_eq!(p12.len(), 1);
         assert!((p12[0].flow - 500.0).abs() < 1e-10);
         assert_eq!(p12[0].path_index, 0);
         assert_eq!(p12[0].link_ids, vec![100]);
 
-        let p21: Vec<_> = paths.iter().filter(|p| p.origin_zone == 2 && p.dest_zone == 1).collect();
+        let p21: Vec<_> = paths
+            .iter()
+            .filter(|p| p.origin_zone == 2 && p.dest_zone == 1)
+            .collect();
         assert_eq!(p21.len(), 1);
         assert!((p21[0].flow - 300.0).abs() < 1e-10);
         assert_eq!(p21[0].link_ids, vec![101]);
@@ -867,7 +957,9 @@ mod tests {
         let paths = graph.extract_shortest_paths(&od, &costs);
 
         let p = &paths[0];
-        let expected_cost: f64 = p.link_ids.iter()
+        let expected_cost: f64 = p
+            .link_ids
+            .iter()
             .map(|&lid| {
                 let idx = graph.link_idx(lid).unwrap();
                 costs[idx]

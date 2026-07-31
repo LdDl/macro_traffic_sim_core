@@ -342,7 +342,10 @@ fn bench_simple_network(c: &mut Criterion) {
 
     c.bench_function("simple_network_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None).unwrap()
+            run_four_step_model(
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+            )
+            .unwrap()
         });
     });
 }
@@ -363,7 +366,10 @@ fn bench_grid_city(c: &mut Criterion) {
 
     c.bench_function("grid_city_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None).unwrap()
+            run_four_step_model(
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+            )
+            .unwrap()
         });
     });
 }
@@ -401,17 +407,28 @@ fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<Zone>) {
     for r in 0..grid_side {
         for c in 0..grid_side {
             let from = node_id(r, c);
-            let (lat1, lon1) = (base_lat + r as f64 * step_deg, base_lon + c as f64 * step_deg);
+            let (lat1, lon1) = (
+                base_lat + r as f64 * step_deg,
+                base_lon + c as f64 * step_deg,
+            );
 
             let neighbors: [(i64, usize, usize); 0] = [];
             let mut neigh: Vec<(i64, f64, f64)> = Vec::new();
             if c + 1 < grid_side {
                 let to = node_id(r, c + 1);
-                neigh.push((to, base_lat + r as f64 * step_deg, base_lon + (c + 1) as f64 * step_deg));
+                neigh.push((
+                    to,
+                    base_lat + r as f64 * step_deg,
+                    base_lon + (c + 1) as f64 * step_deg,
+                ));
             }
             if r + 1 < grid_side {
                 let to = node_id(r + 1, c);
-                neigh.push((to, base_lat + (r + 1) as f64 * step_deg, base_lon + c as f64 * step_deg));
+                neigh.push((
+                    to,
+                    base_lat + (r + 1) as f64 * step_deg,
+                    base_lon + c as f64 * step_deg,
+                ));
             }
             let _ = neighbors;
 
@@ -471,7 +488,10 @@ fn bench_large_grid(c: &mut Criterion) {
 
     c.bench_function("large_grid_pipeline", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None).unwrap()
+            run_four_step_model(
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+            )
+            .unwrap()
         });
     });
 }
@@ -511,18 +531,42 @@ fn bench_warm_start(c: &mut Criterion) {
 
     group.bench_function("cold", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config_cold, None).unwrap()
+            run_four_step_model(
+                &network,
+                &zones,
+                &trip_gen,
+                &impedance,
+                &logit,
+                &config_cold,
+                None,
+            )
+            .unwrap()
         });
     });
 
     group.bench_function("warm", |b| {
         b.iter(|| {
-            run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config_warm, None).unwrap()
+            run_four_step_model(
+                &network,
+                &zones,
+                &trip_gen,
+                &impedance,
+                &logit,
+                &config_warm,
+                None,
+            )
+            .unwrap()
         });
     });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_simple_network, bench_grid_city, bench_large_grid, bench_warm_start);
+criterion_group!(
+    benches,
+    bench_simple_network,
+    bench_grid_city,
+    bench_large_grid,
+    bench_warm_start
+);
 criterion_main!(benches);

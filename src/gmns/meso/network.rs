@@ -29,9 +29,9 @@ use std::collections::HashMap;
 
 use super::link::Link;
 use super::node::Node;
-use crate::gmns::location::Location;
 use crate::error::SimError;
 use crate::gmns::error::GraphError;
+use crate::gmns::location::Location;
 use crate::gmns::types::*;
 
 /// Container for the mesoscopic transport network.

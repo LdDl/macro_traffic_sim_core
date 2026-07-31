@@ -88,5 +88,10 @@ fn bench_furness_2000(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_furness_500, bench_furness_1000, bench_furness_2000);
+criterion_group!(
+    benches,
+    bench_furness_500,
+    bench_furness_1000,
+    bench_furness_2000
+);
 criterion_main!(benches);

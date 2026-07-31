@@ -82,9 +82,10 @@ fn main() {
         ])
         .build();
 
-    let result =
-        run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None)
-            .expect("pipeline failed");
+    let result = run_four_step_model(
+        &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+    )
+    .expect("pipeline failed");
 
     // Trip generation results
     for (i, zone) in zones.iter().enumerate() {
@@ -173,7 +174,10 @@ fn main() {
     let paths = match result.assignment.path_flows.as_ref() {
         Some(p) => p,
         None => {
-            info!(event = "path_analysis", "No path data (store_paths not enabled)");
+            info!(
+                event = "path_analysis",
+                "No path data (store_paths not enabled)"
+            );
             return;
         }
     };
@@ -259,7 +263,7 @@ fn main() {
     }
 
     let mut select_link_sorted: Vec<_> = select_link.into_iter().collect();
-    select_link_sorted.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap());
+    select_link_sorted.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap());
 
     let mut total_through_link = 0.0;
     for ((o, d, ci), (flow_through, n_paths, flow_od)) in &select_link_sorted {

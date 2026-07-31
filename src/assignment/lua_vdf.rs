@@ -85,22 +85,12 @@ impl LuaVdf {
             .exec()
             .map_err(|e| AssignmentError::LuaError(format!("script load: {}", e)))?;
 
-        let _: mlua::Function = lua
-            .globals()
-            .get("travel_time")
-            .map_err(|_| {
-                AssignmentError::LuaError(
-                    "script must define a global 'travel_time' function".into(),
-                )
-            })?;
-        let _: mlua::Function = lua
-            .globals()
-            .get("integral")
-            .map_err(|_| {
-                AssignmentError::LuaError(
-                    "script must define a global 'integral' function".into(),
-                )
-            })?;
+        let _: mlua::Function = lua.globals().get("travel_time").map_err(|_| {
+            AssignmentError::LuaError("script must define a global 'travel_time' function".into())
+        })?;
+        let _: mlua::Function = lua.globals().get("integral").map_err(|_| {
+            AssignmentError::LuaError("script must define a global 'integral' function".into())
+        })?;
 
         Ok(LuaVdf { lua })
     }

@@ -107,8 +107,16 @@ fn main() {
         }
     };
 
-    let result = run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, Some(&on_progress))
-        .expect("pipeline failed");
+    let result = run_four_step_model(
+        &network,
+        &zones,
+        &trip_gen,
+        &impedance,
+        &logit,
+        &config,
+        Some(&on_progress),
+    )
+    .expect("pipeline failed");
 
     for (i, zone) in zones.iter().enumerate() {
         info!(

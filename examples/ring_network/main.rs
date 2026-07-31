@@ -55,17 +55,23 @@ fn main() {
         .with_verbose_level(VerboseLevel::Main)
         .build();
 
-    println!("nodes: {}, links: {}, zones: {}",
-        network.node_count(), network.link_count(), zones.len());
+    println!(
+        "nodes: {}, links: {}, zones: {}",
+        network.node_count(),
+        network.link_count(),
+        zones.len()
+    );
 
-    let (productions, attractions) = trip_gen.generate(&zones)
-        .expect("trip generation failed");
+    let (productions, attractions) = trip_gen.generate(&zones).expect("trip generation failed");
 
     println!();
     println!("trip generation (regression):");
     println!("  {:<8} {:>12} {:>12}", "zone", "production", "attraction");
     for (i, zone) in zones.iter().enumerate() {
-        println!("  {:<8} {:>12.1} {:>12.1}", zone.id, productions[i], attractions[i]);
+        println!(
+            "  {:<8} {:>12.1} {:>12.1}",
+            zone.id, productions[i], attractions[i]
+        );
     }
     let sum_p: f64 = productions.iter().sum();
     let sum_a: f64 = attractions.iter().sum();
@@ -75,7 +81,10 @@ fn main() {
     if (sum_p - sum_a).abs() > 1e-6 * sum_p.max(sum_a) {
         let factor = sum_p / sum_a;
         let imbalance = (sum_p - sum_a).abs() / sum_p.max(sum_a) * 100.0;
-        println!("NOTE: imbalance {:.1}% -- pipeline normalizes A *= {:.6}", imbalance, factor);
+        println!(
+            "NOTE: imbalance {:.1}% -- pipeline normalizes A *= {:.6}",
+            imbalance, factor
+        );
         println!("  (visible in pipeline log between Generation and Distribution)");
         println!();
     }
@@ -85,23 +94,42 @@ fn main() {
     // complete and the first distribution phase below.
     let on_progress = |event: ProgressEvent| {
         if event.feedback_total > 0 {
-            println!("[progress] phase={} iter={}/{}", event.phase, event.feedback_iter, event.feedback_total);
+            println!(
+                "[progress] phase={} iter={}/{}",
+                event.phase, event.feedback_iter, event.feedback_total
+            );
         } else {
             println!("[progress] phase={}", event.phase);
         }
     };
 
-    match run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, Some(&on_progress)) {
+    match run_four_step_model(
+        &network,
+        &zones,
+        &trip_gen,
+        &impedance,
+        &logit,
+        &config,
+        Some(&on_progress),
+    ) {
         Ok(result) => {
             println!();
             println!("feedback iterations: {}", result.feedback_iterations_done);
-            println!("assignment converged: {}, gap: {:.6}", result.assignment.converged, result.assignment.relative_gap);
+            println!(
+                "assignment converged: {}, gap: {:.6}",
+                result.assignment.converged, result.assignment.relative_gap
+            );
 
             println!();
-            println!("OD matrix (all modes, total {:.1} trips):", result.total_od.total());
+            println!(
+                "OD matrix (all modes, total {:.1} trips):",
+                result.total_od.total()
+            );
             let zone_ids: Vec<i64> = zones.iter().map(|z| z.id).collect();
             print!("  {:>6}", "");
-            for &d in &zone_ids { print!("  {:>8}", format!("-> z{}", d)); }
+            for &d in &zone_ids {
+                print!("  {:>8}", format!("-> z{}", d));
+            }
             println!("  {:>8}", "row sum");
             for &o in &zone_ids {
                 print!("  z{:<5}", o);
@@ -111,7 +139,9 @@ fn main() {
                 println!("  {:>8.1}", result.total_od.row_sum(o));
             }
             print!("  {:>6}", "col");
-            for &d in &zone_ids { print!("  {:>8.1}", result.total_od.col_sum(d)); }
+            for &d in &zone_ids {
+                print!("  {:>8.1}", result.total_od.col_sum(d));
+            }
             println!();
 
             println!();
@@ -119,7 +149,12 @@ fn main() {
             for mode in &[AgentType::Auto, AgentType::Bike, AgentType::Walk] {
                 if let Some(od) = result.mode_od.get(mode) {
                     let pct = od.total() / result.total_od.total() * 100.0;
-                    println!("  {:5}  {:7.1} trips  ({:.1}%)", mode.to_string(), od.total(), pct);
+                    println!(
+                        "  {:5}  {:7.1} trips  ({:.1}%)",
+                        mode.to_string(),
+                        od.total(),
+                        pct
+                    );
                 }
             }
 
@@ -130,9 +165,17 @@ fn main() {
             vols.sort_by_key(|&(&id, _)| id);
             for &(&id, &vol) in &vols {
                 if vol > 0.01 {
-                    println!("  {:>8}  {:>8.1}  {:>12.4}",
-                        id, vol,
-                        result.assignment.link_costs.get(&id).copied().unwrap_or(0.0));
+                    println!(
+                        "  {:>8}  {:>8.1}  {:>12.4}",
+                        id,
+                        vol,
+                        result
+                            .assignment
+                            .link_costs
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(0.0)
+                    );
                 }
             }
         }
@@ -145,25 +188,95 @@ fn main() {
 fn build_network() -> Network {
     let mut net = Network::new();
 
-    net.add_node(Node::new(1).with_zone_id(1).with_coordinates(56.8861353328808,  35.901006907224655).build()).unwrap();
-    net.add_node(Node::new(2).with_zone_id(2).with_coordinates(56.88693592938617, 35.90406060218811 ).build()).unwrap();
-    net.add_node(Node::new(3).with_zone_id(4).with_coordinates(56.88649799368358, 35.904288589954376).build()).unwrap();
-    net.add_node(Node::new(4).with_zone_id(3).with_coordinates(56.88577504969939, 35.901316702365875).build()).unwrap();
+    net.add_node(
+        Node::new(1)
+            .with_zone_id(1)
+            .with_coordinates(56.8861353328808, 35.901006907224655)
+            .build(),
+    )
+    .unwrap();
+    net.add_node(
+        Node::new(2)
+            .with_zone_id(2)
+            .with_coordinates(56.88693592938617, 35.90406060218811)
+            .build(),
+    )
+    .unwrap();
+    net.add_node(
+        Node::new(3)
+            .with_zone_id(4)
+            .with_coordinates(56.88649799368358, 35.904288589954376)
+            .build(),
+    )
+    .unwrap();
+    net.add_node(
+        Node::new(4)
+            .with_zone_id(3)
+            .with_coordinates(56.88577504969939, 35.901316702365875)
+            .build(),
+    )
+    .unwrap();
 
     // One-way ring: 1 -> 2 -> 3 -> 4 -> 1
-    net.add_link(Link::new( 1, 1, 2).with_length_meters(205.754).with_free_speed(60.0).with_capacity(5400.0).with_lanes_num(3).build()).unwrap();
-    net.add_link(Link::new( 2, 3, 4).with_length_meters(197.620).with_free_speed(60.0).with_capacity(7200.0).with_lanes_num(4).build()).unwrap();
-    net.add_link(Link::new( 7, 2, 3).with_length_meters( 42.475).with_free_speed(60.0).with_capacity(5400.0).with_lanes_num(3).with_is_connection(true).build()).unwrap();
-    net.add_link(Link::new(12, 4, 1).with_length_meters( 35.825).with_free_speed(60.0).with_capacity(7200.0).with_lanes_num(4).with_is_connection(true).build()).unwrap();
+    net.add_link(
+        Link::new(1, 1, 2)
+            .with_length_meters(205.754)
+            .with_free_speed(60.0)
+            .with_capacity(5400.0)
+            .with_lanes_num(3)
+            .build(),
+    )
+    .unwrap();
+    net.add_link(
+        Link::new(2, 3, 4)
+            .with_length_meters(197.620)
+            .with_free_speed(60.0)
+            .with_capacity(7200.0)
+            .with_lanes_num(4)
+            .build(),
+    )
+    .unwrap();
+    net.add_link(
+        Link::new(7, 2, 3)
+            .with_length_meters(42.475)
+            .with_free_speed(60.0)
+            .with_capacity(5400.0)
+            .with_lanes_num(3)
+            .with_is_connection(true)
+            .build(),
+    )
+    .unwrap();
+    net.add_link(
+        Link::new(12, 4, 1)
+            .with_length_meters(35.825)
+            .with_free_speed(60.0)
+            .with_capacity(7200.0)
+            .with_lanes_num(4)
+            .with_is_connection(true)
+            .build(),
+    )
+    .unwrap();
 
     net
 }
 
 fn build_zones() -> Vec<Zone> {
     vec![
-        Zone::new(1).with_population(100.0).with_employment( 15.0).build(),
-        Zone::new(2).with_population( 10.0).with_employment( 99.0).build(),
-        Zone::new(3).with_population(100.0).with_employment(200.0).build(),
-        Zone::new(4).with_population(190.0).with_employment( 22.0).build(),
+        Zone::new(1)
+            .with_population(100.0)
+            .with_employment(15.0)
+            .build(),
+        Zone::new(2)
+            .with_population(10.0)
+            .with_employment(99.0)
+            .build(),
+        Zone::new(3)
+            .with_population(100.0)
+            .with_employment(200.0)
+            .build(),
+        Zone::new(4)
+            .with_population(190.0)
+            .with_employment(22.0)
+            .build(),
     ]
 }

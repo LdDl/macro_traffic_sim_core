@@ -9,8 +9,8 @@ use macro_traffic_sim_core::assignment::{
 use macro_traffic_sim_core::gmns::meso::link::Link;
 use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
-use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::pipeline::haversine_km;
 
 fn lua_bpr_script(alpha: f64, beta: f64) -> String {
@@ -65,7 +65,10 @@ fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<i64>) {
     for r in 0..grid_side {
         for c in 0..grid_side {
             let from = node_id(r, c);
-            let (lat1, lon1) = (base_lat + r as f64 * step_deg, base_lon + c as f64 * step_deg);
+            let (lat1, lon1) = (
+                base_lat + r as f64 * step_deg,
+                base_lon + c as f64 * step_deg,
+            );
 
             let mut neigh: Vec<(i64, f64, f64)> = Vec::new();
             if c + 1 < grid_side {

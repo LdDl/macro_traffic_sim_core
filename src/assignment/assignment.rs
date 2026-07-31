@@ -894,5 +894,4 @@ mod tests {
         let i = a.integral(10.0, 500.0, 1000.0);
         assert!((i - 10.0 * 500.0).abs() < EPS);
     }
-
 }

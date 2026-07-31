@@ -81,7 +81,11 @@ impl AssignmentMethod for Msa {
         initial_volumes: Option<&HashMap<LinkID, f64>>,
     ) -> Result<AssignmentResult, AssignmentError> {
         let warm = initial_volumes.is_some();
-        log_main!(EVENT_ASSIGNMENT, "Starting MSA assignment", warm_start = warm);
+        log_main!(
+            EVENT_ASSIGNMENT,
+            "Starting MSA assignment",
+            warm_start = warm
+        );
 
         let n = graph.num_links;
 

@@ -41,7 +41,7 @@
 //! Transportation Science, 16(2), 231-240.
 //! DOI: 10.1287/trsc.16.2.231
 //! Diagonalization for class-specific VDFs (NOT implemented due model limitations).
-//! 
+//!
 //! Model limitations are:
 //! * All classes share the same link cost `t_a(V_a)``, computed on PCU-total volume.
 //! * Per-class cost is a scalar multiple: `c_a^m = ff_mult_m * t_a(V_a)`.
@@ -138,7 +138,11 @@ pub fn assign_multiclass_fw(
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
         graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_volumes[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -157,7 +161,11 @@ pub fn assign_multiclass_fw(
         graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
 
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_aux[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -246,7 +254,11 @@ pub fn assign_multiclass_msa(
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
         graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_volumes[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -265,7 +277,11 @@ pub fn assign_multiclass_msa(
         graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
 
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_aux[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -393,11 +409,7 @@ fn init_class_volumes(
     }
 }
 
-fn compute_pcu_total(
-    class_volumes: &[Vec<f64>],
-    classes: &[UserClass],
-    n: usize,
-) -> Vec<f64> {
+fn compute_pcu_total(class_volumes: &[Vec<f64>], classes: &[UserClass], n: usize) -> Vec<f64> {
     let mut total = vec![0.0; n];
     for (ci, vols) in class_volumes.iter().enumerate() {
         let pcu = classes[ci].pcu;
@@ -491,11 +503,7 @@ fn build_result(
 
     let path_flows = if config.store_paths {
         let multipliers: Vec<f64> = classes.iter().map(|c| c.ff_time_multiplier).collect();
-        Some(graph.extract_shortest_paths_multiclass(
-            od_matrices,
-            &multipliers,
-            shared_costs,
-        ))
+        Some(graph.extract_shortest_paths_multiclass(od_matrices, &multipliers, shared_costs))
     } else {
         None
     };
@@ -524,10 +532,20 @@ mod tests {
 
     fn two_link_network() -> (Network, IndexedGraph) {
         let mut net = Network::new();
-        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build())
-            .unwrap();
-        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(0.0, 1.0).build())
-            .unwrap();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(0.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(0.0, 1.0)
+                .build(),
+        )
+        .unwrap();
         net.add_link(
             Link::new(100, 1, 2)
                 .with_length_meters(1000.0)
@@ -739,16 +757,12 @@ mod tests {
         let paths = result.path_flows.as_ref().expect("paths should be Some");
         assert_eq!(paths.len(), 2);
 
-        let car_paths: Vec<_> = paths.iter()
-            .filter(|p| p.class_index == Some(0))
-            .collect();
+        let car_paths: Vec<_> = paths.iter().filter(|p| p.class_index == Some(0)).collect();
         assert_eq!(car_paths.len(), 1);
         assert!((car_paths[0].flow - 400.0).abs() < EPS);
         assert_eq!(car_paths[0].link_ids, vec![100]);
 
-        let truck_paths: Vec<_> = paths.iter()
-            .filter(|p| p.class_index == Some(1))
-            .collect();
+        let truck_paths: Vec<_> = paths.iter().filter(|p| p.class_index == Some(1)).collect();
         assert_eq!(truck_paths.len(), 1);
         assert!((truck_paths[0].flow - 100.0).abs() < EPS);
         assert_eq!(truck_paths[0].link_ids, vec![100]);
@@ -781,11 +795,13 @@ mod tests {
         let paths = result.path_flows.as_ref().expect("paths should be Some");
         assert_eq!(paths.len(), 2);
 
-        let car_flow: f64 = paths.iter()
+        let car_flow: f64 = paths
+            .iter()
             .filter(|p| p.class_index == Some(0))
             .map(|p| p.flow)
             .sum();
-        let truck_flow: f64 = paths.iter()
+        let truck_flow: f64 = paths
+            .iter()
             .filter(|p| p.class_index == Some(1))
             .map(|p| p.flow)
             .sum();

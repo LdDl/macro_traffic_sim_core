@@ -476,9 +476,7 @@ mod tests {
         od.set(2, 1, 300.0);
 
         let gp = GradientProjection::new();
-        let result = gp
-            .assign(&net, &graph, &od, &bpr, &config, None)
-            .unwrap();
+        let result = gp.assign(&net, &graph, &od, &bpr, &config, None).unwrap();
 
         let paths = result.path_flows.expect("path_flows should be Some");
         assert!(!paths.is_empty());
@@ -513,9 +511,7 @@ mod tests {
         od.set(1, 2, 500.0);
 
         let gp = GradientProjection::new();
-        let result = gp
-            .assign(&net, &graph, &od, &bpr, &config, None)
-            .unwrap();
+        let result = gp.assign(&net, &graph, &od, &bpr, &config, None).unwrap();
 
         assert!(result.path_flows.is_none());
     }

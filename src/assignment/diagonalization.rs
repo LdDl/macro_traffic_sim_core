@@ -62,8 +62,8 @@ use super::indexed_graph::IndexedGraph;
 use super::multiclass::UserClass;
 use super::od_path::OdPath;
 use super::{
-    AkcelikDelayFunction, AssignmentConfig, AssignmentResult, BprFunction,
-    ConicalDelayFunction, VolumeDelayFunction,
+    AkcelikDelayFunction, AssignmentConfig, AssignmentResult, BprFunction, ConicalDelayFunction,
+    VolumeDelayFunction,
 };
 use crate::log_additional;
 use crate::log_main;
@@ -161,7 +161,10 @@ pub fn assign_diagonalization(
     let n = graph.num_links;
     let m = classes.len();
 
-    let dispatched: Vec<VdfDispatch> = class_vdfs.iter().map(|v| VdfDispatch::from_dyn(*v)).collect();
+    let dispatched: Vec<VdfDispatch> = class_vdfs
+        .iter()
+        .map(|v| VdfDispatch::from_dyn(*v))
+        .collect();
 
     let mut class_volumes: Vec<Vec<f64>> = vec![vec![0.0; n]; m];
     let mut costs = vec![0.0; n];
@@ -333,9 +336,8 @@ fn inner_fw(
             break;
         }
 
-        let lambda = line_search_with_background(
-            graph, class_volumes, aux, pcu, background_pcu, vdf,
-        );
+        let lambda =
+            line_search_with_background(graph, class_volumes, aux, pcu, background_pcu, vdf);
 
         for i in 0..n {
             class_volumes[i] += lambda * (aux[i] - class_volumes[i]);
@@ -362,11 +364,7 @@ fn compute_class_costs(
     }
 }
 
-fn compute_pcu_total(
-    class_volumes: &[Vec<f64>],
-    classes: &[UserClass],
-    n: usize,
-) -> Vec<f64> {
+fn compute_pcu_total(class_volumes: &[Vec<f64>], classes: &[UserClass], n: usize) -> Vec<f64> {
     let mut total = vec![0.0; n];
     for (ci, vols) in class_volumes.iter().enumerate() {
         let pcu = classes[ci].pcu;
@@ -391,8 +389,7 @@ fn line_search_with_background(
         for i in 0..graph.num_links {
             let vol = current[i] + lambda * (aux_vols[i] - current[i]);
             let total = background_pcu[i] + vol * pcu;
-            objective +=
-                vdf.integral(graph.link_ff_time[i], total, graph.link_capacity[i]);
+            objective += vdf.integral(graph.link_ff_time[i], total, graph.link_capacity[i]);
         }
         objective
     };
@@ -427,11 +424,7 @@ fn line_search_with_background(
 }
 
 /// Max relative change across all class volumes between iterations.
-fn max_relative_change(
-    prev: &[Vec<f64>],
-    curr: &[Vec<f64>],
-    n: usize,
-) -> f64 {
+fn max_relative_change(prev: &[Vec<f64>], curr: &[Vec<f64>], n: usize) -> f64 {
     let mut max_change = 0.0_f64;
     for ci in 0..prev.len() {
         let mut sum_diff_sq = 0.0;
@@ -640,8 +633,8 @@ mod tests {
     use crate::gmns::meso::link::Link;
     use crate::gmns::meso::network::Network;
     use crate::gmns::meso::node::Node;
-    use crate::od::dense::DenseOdMatrix;
     use crate::od::OdMatrix;
+    use crate::od::dense::DenseOdMatrix;
 
     const EPS: f64 = 1e-4;
 
@@ -703,10 +696,9 @@ mod tests {
             store_paths: false,
         };
 
-        let result = assign_diagonalization(
-            &graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4,
-        )
-        .unwrap();
+        let result =
+            assign_diagonalization(&graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4)
+                .unwrap();
 
         assert!(result.converged);
 
@@ -743,10 +735,9 @@ mod tests {
             store_paths: false,
         };
 
-        let result = assign_diagonalization(
-            &graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4,
-        )
-        .unwrap();
+        let result =
+            assign_diagonalization(&graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4)
+                .unwrap();
 
         assert!(result.converged);
 
@@ -812,9 +803,7 @@ mod tests {
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr, &bpr];
 
         let config = AssignmentConfig::default();
-        let result = assign_diagonalization(
-            &graph, &[car], &od_matrices, &vdfs, &config, 10, 1e-4,
-        );
+        let result = assign_diagonalization(&graph, &[car], &od_matrices, &vdfs, &config, 10, 1e-4);
         assert!(result.is_err());
     }
 }

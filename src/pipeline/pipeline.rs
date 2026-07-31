@@ -14,13 +14,12 @@ use super::error::{InvalidInputReason, PipelineError};
 use super::phase::{PipelinePhase, ProgressEvent};
 use crate::assignment::{
     AssignmentMethod, AssignmentResult, IndexedGraph, frank_wolfe::FrankWolfe,
-    gradient_projection::GradientProjection, multiclass, msa::Msa,
+    gradient_projection::GradientProjection, msa::Msa, multiclass,
 };
 use crate::config::{AssignmentMethodType, ModelConfig};
 use crate::error::SimError;
 use crate::gmns::meso::network::Network;
 use crate::gmns::types::{AgentType, LinkID, ZoneID};
-use crate::{log_main, log_additional};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
@@ -29,6 +28,7 @@ use crate::trip_distribution::impedance::ImpedanceFunction;
 use crate::trip_generation::TripGenerator;
 use crate::verbose::{EVENT_FEEDBACK_LOOP, EVENT_PIPELINE, EVENT_PREFLIGHT, set_verbose_level};
 use crate::zone::Zone;
+use crate::{log_additional, log_main};
 
 const EARTH_RADIUS_KM: f64 = 6371.0;
 const EPS_DEMAND_FRACTION: f64 = 1e-6;
@@ -212,7 +212,11 @@ pub fn run_four_step_model(
         );
 
         // Step 2: Trip Distribution
-        notify(ProgressEvent::feedback(PipelinePhase::Distribution, feedback_done, max_feedback));
+        notify(ProgressEvent::feedback(
+            PipelinePhase::Distribution,
+            feedback_done,
+            max_feedback,
+        ));
         let step_start = Instant::now();
         total_od = gravity.distribute(&productions, &attractions, &skim, impedance, &zone_ids)?;
         t_distribution += step_start.elapsed();
@@ -225,7 +229,11 @@ pub fn run_four_step_model(
         );
 
         // Step 3: Mode Choice
-        notify(ProgressEvent::feedback(PipelinePhase::ModeChoice, feedback_done, max_feedback));
+        notify(ProgressEvent::feedback(
+            PipelinePhase::ModeChoice,
+            feedback_done,
+            max_feedback,
+        ));
         let step_start = Instant::now();
         let mut mode_skims: HashMap<AgentType, ModeSkim> = HashMap::with_capacity(3);
         let auto_time = time_skim_in_minutes(&skim, &zone_ids);
@@ -275,7 +283,11 @@ pub fn run_four_step_model(
             PipelineError::MissingResult("no AUTO OD matrix from mode choice".to_string())
         })?;
 
-        notify(ProgressEvent::feedback(PipelinePhase::Assignment, feedback_done, max_feedback));
+        notify(ProgressEvent::feedback(
+            PipelinePhase::Assignment,
+            feedback_done,
+            max_feedback,
+        ));
         let step_start = Instant::now();
 
         assignment_result = if let Some(ref uc) = config.user_classes {
@@ -423,11 +435,13 @@ fn preflight_check(
         .map(|z| z.id)
         .collect();
     if missing_ids.len() == zones.len() {
-        return Err(PipelineError::InvalidInput(InvalidInputReason::NoCentroids {
-            zone_count: zones.len(),
-            missing_ids,
-        })
-        .into());
+        return Err(
+            PipelineError::InvalidInput(InvalidInputReason::NoCentroids {
+                zone_count: zones.len(),
+                missing_ids,
+            })
+            .into(),
+        );
     }
 
     // Case 3: all zone socioeconomic attributes are zero.
@@ -455,20 +469,24 @@ fn preflight_check(
     let total_p: f64 = productions.iter().sum();
     let total_a: f64 = attractions.iter().sum();
     if total_p <= 0.0 {
-        return Err(PipelineError::InvalidInput(InvalidInputReason::ZeroProductions {
-            total_pop,
-            total_emp,
-            total_hh,
-        })
-        .into());
+        return Err(
+            PipelineError::InvalidInput(InvalidInputReason::ZeroProductions {
+                total_pop,
+                total_emp,
+                total_hh,
+            })
+            .into(),
+        );
     }
     if total_a <= 0.0 {
-        return Err(PipelineError::InvalidInput(InvalidInputReason::ZeroAttractions {
-            total_pop,
-            total_emp,
-            total_hh,
-        })
-        .into());
+        return Err(
+            PipelineError::InvalidInput(InvalidInputReason::ZeroAttractions {
+                total_pop,
+                total_emp,
+                total_hh,
+            })
+            .into(),
+        );
     }
 
     // Case 5: zone centroids form multiple strongly-connected components.
@@ -485,10 +503,8 @@ fn preflight_check(
     );
     if components.len() > 1 {
         return Err(
-            PipelineError::InvalidInput(InvalidInputReason::DisconnectedComponents {
-                components,
-            })
-            .into(),
+            PipelineError::InvalidInput(InvalidInputReason::DisconnectedComponents { components })
+                .into(),
         );
     }
 
