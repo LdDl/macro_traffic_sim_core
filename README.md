@@ -130,11 +130,17 @@ All examples build an in-memory network and run without external files.
 | [`diagonalization`](examples/diagonalization/) | Per-class VDFs (asymmetric costs), direct assignment call |
 | [`warm_start_test`](examples/warm_start_test/) | Warm start: reuse previous iteration flows |
 | [`lua_vdf`](examples/lua_vdf/) | Lua-scripted VDF with diagonalization (requires `lua` feature) |
+| [`transit`](examples/transit/) | Transit assignment with optimal strategies (Spiess & Florian, 1989) |
+| [`transit_gtfs`](examples/transit_gtfs/) | Transit assignment from a GTFS feed linked via GMNS locations |
+| [`gtfs_patterns`](examples/gtfs_patterns/) | How GTFS trips are grouped into patterns (template trips, directions, short-turns, interpolation) |
 
 ```sh
 cargo run --example simple_network
 cargo run --example diagonalization
 cargo run --example lua_vdf --features lua
+cargo run --example transit
+cargo run --example transit_gtfs
+cargo run --example gtfs_patterns
 ```
 
 ## Configuration
@@ -346,7 +352,18 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     Australian Road Research, 21(3), 49-59.
     Akcelik VDF for signalized intersections.
 
-12. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+12. Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment
+    model for transit networks",
+    Transportation Research Part B, 23(2), 83-102.
+    DOI: 10.1016/0191-2615(89)90034-9
+    Frequency-based transit assignment (the `transit` module).
+
+13. GTFS (General Transit Feed Specification), static reference.
+    https://gtfs.org/documentation/schedule/reference/
+    Source format for transit routes/frequencies (the `gtfs-rs` crate and
+    the `transit::from_gtfs` converter).
+
+14. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
 
 ## License
 
