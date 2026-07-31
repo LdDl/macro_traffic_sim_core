@@ -46,6 +46,8 @@ pub enum GraphError {
     NodeNotFound { node_id: i64 },
     /// Link not found by ID.
     LinkNotFound { link_id: i64 },
+    /// Location not found by ID.
+    LocationNotFound { location_id: i64 },
     /// Zone not found by ID.
     ZoneNotFound { zone_id: i64 },
     /// Duplicate entity ID.
@@ -62,6 +64,9 @@ impl fmt::Display for GraphError {
             }
             GraphError::LinkNotFound { link_id } => {
                 write!(f, "link not found: {}", link_id)
+            }
+            GraphError::LocationNotFound { location_id } => {
+                write!(f, "location not found: {}", location_id)
             }
             GraphError::ZoneNotFound { zone_id } => {
                 write!(f, "zone not found: {}", zone_id)

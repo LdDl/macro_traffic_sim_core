@@ -8,6 +8,9 @@
 //!
 //! ## Shared
 //!
+//! - [`location`] -- GMNS location records (points along links: bus stops,
+//!   driveways); resolution-agnostic, stored by the network container of
+//!   each level
 //! - [`types`] -- ID aliases and enumeration types
 //! - [`defaults`] -- default lanes/speed/capacity by link type
 //! - [`error`] -- graph error types
@@ -29,7 +32,8 @@
 //! ```
 pub mod defaults;
 pub mod error;
+pub mod location;
 pub mod meso;
 pub mod types;
 
-pub use self::{defaults::*, meso::*, types::*};
+pub use self::{defaults::*, location::*, meso::*, types::*};
