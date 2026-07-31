@@ -116,7 +116,7 @@ fn main() {
     )
     .expect("diagonalization failed");
 
-    println!("\n--- Assignment result ---");
+    println!("\nAssignment result:");
     println!(
         "Iterations: {}, gap: {:.6}, converged: {}",
         result.iterations, result.relative_gap, result.converged
@@ -132,7 +132,7 @@ fn main() {
     let pcu_total: f64 = result.link_volumes.values().sum();
     println!("PCU total on network: {:.1}", pcu_total);
 
-    println!("\n--- Top 10 links by PCU volume ---");
+    println!("\nTop 10 links by PCU volume:");
     let mut volumes: Vec<(i64, f64)> = result
         .link_volumes
         .iter()
@@ -155,7 +155,7 @@ fn main() {
         }
     };
 
-    println!("\n--- Paths: {} total ---", paths.len());
+    println!("\nPaths: {} total", paths.len());
 
     for (ci, name) in class_names.iter().enumerate() {
         let count = paths
@@ -167,7 +167,7 @@ fn main() {
 
     let origin = 1;
     let dest = 4;
-    println!("\n--- OD pair: Zone {} -> Zone {} ---", origin, dest);
+    println!("\nOD pair: Zone {} -> Zone {}", origin, dest);
 
     for (ci, name) in class_names.iter().enumerate() {
         let class_paths: Vec<_> = paths
@@ -186,7 +186,7 @@ fn main() {
     }
 
     let target_link: i64 = 102;
-    println!("\n--- Select link analysis: link {} ---", target_link);
+    println!("\nSelect link analysis: link {}", target_link);
 
     let mut select_link: Vec<((i64, i64, Option<u16>), f64)> = Vec::new();
     for p in paths {
