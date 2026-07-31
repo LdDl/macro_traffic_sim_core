@@ -62,6 +62,10 @@ path = "examples/transit/main.rs"
 name = "transit_gtfs"
 path = "examples/transit_gtfs/main.rs"
 
+[[example]]
+name = "gtfs_patterns"
+path = "examples/gtfs_patterns/main.rs"
+
 [dev-dependencies]
 csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
