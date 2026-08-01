@@ -133,6 +133,7 @@ All examples build an in-memory network and run without external files.
 | [`transit`](examples/transit/) | Transit assignment with optimal strategies (Spiess & Florian, 1989) |
 | [`transit_gtfs`](examples/transit_gtfs/) | Transit assignment from a GTFS feed linked via GMNS locations |
 | [`gtfs_patterns`](examples/gtfs_patterns/) | How GTFS trips are grouped into patterns (template trips, directions, short-turns, interpolation) |
+| [`multimodal`](examples/multimodal/) | Cars and public transit on one network: 4-step road pipeline + buses/tram over GMNS locations |
 
 ```sh
 cargo run --example simple_network
@@ -141,6 +142,7 @@ cargo run --example lua_vdf --features lua
 cargo run --example transit
 cargo run --example transit_gtfs
 cargo run --example gtfs_patterns
+cargo run --example multimodal
 ```
 
 ## Configuration

@@ -56,6 +56,29 @@ Each diamond edge is a pair of one-way road segment links (forward + reverse), g
 
 ## Transit layer
 
+Both layers in one picture: the road diamond with the stop locations pinned to its links (`[..]` = intersection node, `o` = stop location at its offset, link IDs on the edges):
+
+```text
+                    [1]
+              102 /     \ 100
+             821 o       o 811
+                 |       |
+             823 o       o 812
+                 |       |
+               [3]       [2]
+                 |       |
+             824 o       o 814
+              106 \     / 104
+                   \   /
+                    [4]
+
+      west side:                 east side:
+      tram T1 (821-823-824)      bus B1 (811-812-814)
+                                 bus B2 (811-814 express)
+```
+
+The chains read top to bottom: the eastern buses run [1] - 811 - 812 - [2] - 814 - [4] along links 100 and 104, the western tram runs [1] - 821 - 823 - [3] - 824 - [4] along links 102 and 106. The road graph itself contains none of this - the stops exist only as `location` records referencing the links.
+
 ### Stops as GMNS locations
 
 The stops are `location` records: points on road links (`link_id` + `lr` offset from the reference node), the road graph knows nothing about them. Eastern side (links 100, 104) hosts the bus stops, western side (links 102, 106) the in-street tram stops. One platform per stop serves both directions here; a real model would split them per direction.
