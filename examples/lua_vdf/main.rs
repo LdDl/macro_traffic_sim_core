@@ -1,17 +1,12 @@
-//! Example: diagonalization multi-class assignment with per-class VDFs.
+//! Example: Lua-scripted volume-delay function with diagonalization.
 //!
-//! Same 4-zone diamond network as `multiclass_network`, but each class
-//! gets its own volume-delay function. Cars use standard BPR(0.15, 4.0),
-//! trucks use a steeper BPR(0.30, 4.0) - more sensitive to congestion.
+//! Same 4-zone diamond network as `diagonalization`, but the truck VDF
+//! is defined as a Lua script instead of a native `BprFunction`.
+//! Car still uses native BPR(0.15, 4.0).
 //!
-//! Because VDFs differ per class, the Beckmann symmetry condition does
-//! not apply and shortest path trees may differ between classes.
-//! Diagonalization (Dafermos 1982) is required.
-//!
-//! Demonstrates:
-//! 1. Per-class VDFs with different parameters
-//! 2. Per-class path extraction (paths may differ across classes)
-//! 3. Cost comparison between classes on the same links
+//! The Lua script implements BPR(0.30, 4.0) - identical formula to the
+//! native truck VDF in the `diagonalization` example, so results should
+//! match. This serves as both a usage demo and a correctness check.
 //!
 //! ```text
 //!        Zone 1 (residential)
@@ -27,11 +22,12 @@
 //! ```
 //!
 //! Usage:
-//!   cargo run --example diagonalization
+//!   cargo run --example lua_vdf --features lua
 
 use std::collections::HashMap;
 
 use macro_traffic_sim_core::assignment::diagonalization::assign_diagonalization;
+use macro_traffic_sim_core::assignment::lua_vdf::LuaVdf;
 use macro_traffic_sim_core::assignment::multiclass::UserClass;
 use macro_traffic_sim_core::assignment::{
     AssignmentConfig, BprFunction, IndexedGraph, VolumeDelayFunction,
@@ -43,6 +39,23 @@ use macro_traffic_sim_core::od::OdMatrix;
 use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::pipeline::haversine_km;
 
+const TRUCK_LUA_BPR: &str = r#"
+local alpha = 0.30
+local beta = 4.0
+
+function travel_time(ff, vol, cap)
+    if cap <= 0 then return math.huge end
+    return ff * (1.0 + alpha * (vol / cap) ^ beta)
+end
+
+function integral(ff, vol, cap)
+    if cap <= 0 then return math.huge end
+    if vol <= 0 then return 0.0 end
+    local ratio = vol / cap
+    return ff * (vol + alpha * cap * ratio ^ (beta + 1.0) / (beta + 1.0))
+end
+"#;
+
 fn main() {
     let network = build_network();
     let graph = IndexedGraph::from_network(&network);
@@ -53,22 +66,19 @@ fn main() {
         network.links.len()
     );
 
-    // Two classes with DIFFERENT VDFs
     let car = UserClass::new("car", 1.0, 1.0);
     let truck = UserClass::new("truck", 2.5, 1.0);
     let classes = vec![car, truck];
 
-    // Car: standard BPR
     let bpr_car = BprFunction::new(0.15, 4.0);
-    // Truck: steeper BPR (more sensitive to congestion)
-    let bpr_truck = BprFunction::new(0.30, 4.0);
-    let class_vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
+    let lua_truck = LuaVdf::new(TRUCK_LUA_BPR).expect("failed to load Lua VDF");
 
+    println!("Car VDF:   native BPR(0.15, 4.0)");
+    println!("Truck VDF: Lua BPR(0.30, 4.0)");
+
+    let class_vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &lua_truck];
     let class_names = ["car", "truck"];
 
-    // OD matrices: same diamond network demand
-    // Zone 1 (residential, high production) -> Zones 2,3,4
-    // Zone 4 (industrial, moderate attraction) <- Zones 1,2,3
     let zones = vec![1_i64, 2, 3, 4];
     let od_car = DenseOdMatrix::from_data(
         zones.clone(),
@@ -112,7 +122,6 @@ fn main() {
         result.iterations, result.relative_gap, result.converged
     );
 
-    // Per-class volumes
     if let Some(ref cv) = result.class_volumes {
         for (name, vols) in cv {
             let total: f64 = vols.values().sum();
@@ -123,7 +132,6 @@ fn main() {
     let pcu_total: f64 = result.link_volumes.values().sum();
     println!("PCU total on network: {:.1}", pcu_total);
 
-    // Top loaded links
     println!("\n--- Top 10 links by PCU volume ---");
     let mut volumes: Vec<(i64, f64)> = result
         .link_volumes
@@ -139,25 +147,6 @@ fn main() {
         );
     }
 
-    // Per-class cost comparison on the same link
-    println!("\n--- Per-class cost comparison ---");
-    println!("Car VDF:   BPR(alpha=0.15, beta=4.0)");
-    println!("Truck VDF: BPR(alpha=0.30, beta=4.0)");
-    if let Some(&(top_link, top_vol)) = volumes.first() {
-        let ff_time = 0.014; // approximate for ~840m at 60 km/h
-        let cap = 3600.0; // 2 lanes * 1800
-        let car_cost = bpr_car.travel_time(ff_time, top_vol, cap).unwrap();
-        let truck_cost = bpr_truck.travel_time(ff_time, top_vol, cap).unwrap();
-        println!(
-            "Link {}: car_cost={:.6} h, truck_cost={:.6} h, ratio={:.2}",
-            top_link,
-            car_cost,
-            truck_cost,
-            truck_cost / car_cost
-        );
-    }
-
-    // Path analysis
     let paths = match result.path_flows.as_ref() {
         Some(p) => p,
         None => {
@@ -168,7 +157,6 @@ fn main() {
 
     println!("\n--- Paths: {} total ---", paths.len());
 
-    // Count paths per class
     for (ci, name) in class_names.iter().enumerate() {
         let count = paths
             .iter()
@@ -177,7 +165,6 @@ fn main() {
         println!("  {}: {} paths", name, count);
     }
 
-    // OD pair query: Zone 1 -> Zone 4, per class
     let origin = 1;
     let dest = 4;
     println!("\n--- OD pair: Zone {} -> Zone {} ---", origin, dest);
@@ -198,39 +185,8 @@ fn main() {
         }
     }
 
-    // Check if paths differ between classes
-    let car_links: Vec<_> = paths
-        .iter()
-        .filter(|p| p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(0))
-        .map(|p| &p.link_ids)
-        .collect();
-    let truck_links: Vec<_> = paths
-        .iter()
-        .filter(|p| p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(1))
-        .map(|p| &p.link_ids)
-        .collect();
-
-    if !car_links.is_empty() && !truck_links.is_empty() {
-        if car_links[0] == truck_links[0] {
-            println!("  -> Same route for both classes (VDF difference not large enough)");
-        } else {
-            println!(
-                "  -> Different routes! Car: {:?}, Truck: {:?}",
-                car_links[0], truck_links[0]
-            );
-        }
-    }
-
-    // Select link analysis: which OD pairs use a specific link?
     let target_link: i64 = 102;
     println!("\n--- Select link analysis: link {} ---", target_link);
-
-    let mut od_totals: HashMap<(i64, i64, Option<u16>), f64> = HashMap::new();
-    for p in paths {
-        *od_totals
-            .entry((p.origin_zone, p.dest_zone, p.class_index))
-            .or_insert(0.0) += p.flow;
-    }
 
     let mut select_link: Vec<((i64, i64, Option<u16>), f64)> = Vec::new();
     for p in paths {

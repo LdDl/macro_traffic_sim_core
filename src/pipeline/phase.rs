@@ -54,10 +54,18 @@ pub struct ProgressEvent {
 
 impl ProgressEvent {
     pub fn single(phase: PipelinePhase) -> Self {
-        ProgressEvent { phase, feedback_iter: 0, feedback_total: 0 }
+        ProgressEvent {
+            phase,
+            feedback_iter: 0,
+            feedback_total: 0,
+        }
     }
 
     pub fn feedback(phase: PipelinePhase, iter: usize, total: usize) -> Self {
-        ProgressEvent { phase, feedback_iter: iter, feedback_total: total }
+        ProgressEvent {
+            phase,
+            feedback_iter: iter,
+            feedback_total: total,
+        }
     }
 }

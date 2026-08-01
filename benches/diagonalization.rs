@@ -4,12 +4,14 @@ use criterion::{Criterion, criterion_group, criterion_main};
 
 use macro_traffic_sim_core::assignment::diagonalization::assign_diagonalization;
 use macro_traffic_sim_core::assignment::multiclass::{UserClass, assign_multiclass_fw};
-use macro_traffic_sim_core::assignment::{AssignmentConfig, BprFunction, IndexedGraph, OdPath, VolumeDelayFunction};
+use macro_traffic_sim_core::assignment::{
+    AssignmentConfig, BprFunction, IndexedGraph, OdPath, VolumeDelayFunction,
+};
 use macro_traffic_sim_core::gmns::meso::link::Link;
 use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
-use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::pipeline::haversine_km;
 
 fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<i64>) {
@@ -43,7 +45,10 @@ fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<i64>) {
     for r in 0..grid_side {
         for c in 0..grid_side {
             let from = node_id(r, c);
-            let (lat1, lon1) = (base_lat + r as f64 * step_deg, base_lon + c as f64 * step_deg);
+            let (lat1, lon1) = (
+                base_lat + r as f64 * step_deg,
+                base_lon + c as f64 * step_deg,
+            );
 
             let mut neigh: Vec<(i64, f64, f64)> = Vec::new();
             if c + 1 < grid_side {
@@ -134,10 +139,7 @@ fn print_path_memory(paths: &[OdPath], label: &str) {
 
     println!("  [{label}] paths: {}", paths.len());
     println!("  [{label}] avg links/path: {:.1}", avg_links);
-    println!(
-        "  [{label}] sizeof(OdPath): {} bytes",
-        struct_size
-    );
+    println!("  [{label}] sizeof(OdPath): {} bytes", struct_size);
     println!(
         "  [{label}] memory: structs={:.2} MB, heap(link_ids)={:.2} MB, total={:.2} MB",
         struct_total as f64 / 1_048_576.0,
@@ -181,12 +183,7 @@ fn bench_diagonalization_100z(c: &mut Criterion) {
     group.bench_function("beckmann_fw", |b| {
         let od_refs: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
         let classes = vec![car_sym.clone(), truck_sym.clone()];
-        b.iter(|| {
-            assign_multiclass_fw(
-                &graph, &classes, &od_refs, &bpr, &config, None,
-            )
-            .unwrap()
-        });
+        b.iter(|| assign_multiclass_fw(&graph, &classes, &od_refs, &bpr, &config, None).unwrap());
     });
 
     group.bench_function("diag_shared_vdf", |b| {
@@ -194,10 +191,7 @@ fn bench_diagonalization_100z(c: &mut Criterion) {
         let classes = vec![car_sym.clone(), truck_sym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr, &bpr];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3).unwrap()
         });
     });
 
@@ -206,10 +200,7 @@ fn bench_diagonalization_100z(c: &mut Criterion) {
         let classes = vec![car_asym.clone(), truck_asym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3).unwrap()
         });
     });
 
@@ -224,10 +215,8 @@ fn bench_diagonalization_100z(c: &mut Criterion) {
         let classes = vec![car_asym.clone(), truck_asym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3)
+                .unwrap()
         });
     });
 
@@ -235,10 +224,8 @@ fn bench_diagonalization_100z(c: &mut Criterion) {
     let od_refs: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
     let classes = vec![car_asym.clone(), truck_asym.clone()];
     let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
-    let result = assign_diagonalization(
-        &graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3,
-    )
-    .unwrap();
+    let result =
+        assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3).unwrap();
     if let Some(ref paths) = result.path_flows {
         print_path_memory(paths, "diag-100z");
     }
@@ -293,12 +280,7 @@ fn bench_diagonalization_625z(c: &mut Criterion) {
     group.bench_function("beckmann_fw", |b| {
         let od_refs: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
         let classes = vec![car_sym.clone(), truck_sym.clone()];
-        b.iter(|| {
-            assign_multiclass_fw(
-                &graph, &classes, &od_refs, &bpr, &config, None,
-            )
-            .unwrap()
-        });
+        b.iter(|| assign_multiclass_fw(&graph, &classes, &od_refs, &bpr, &config, None).unwrap());
     });
 
     group.bench_function("diag_shared_vdf", |b| {
@@ -306,10 +288,7 @@ fn bench_diagonalization_625z(c: &mut Criterion) {
         let classes = vec![car_sym.clone(), truck_sym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr, &bpr];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3).unwrap()
         });
     });
 
@@ -318,10 +297,7 @@ fn bench_diagonalization_625z(c: &mut Criterion) {
         let classes = vec![car_asym.clone(), truck_asym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config, 10, 1e-3).unwrap()
         });
     });
 
@@ -330,10 +306,8 @@ fn bench_diagonalization_625z(c: &mut Criterion) {
         let classes = vec![car_asym.clone(), truck_asym.clone()];
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
         b.iter(|| {
-            assign_diagonalization(
-                &graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3,
-            )
-            .unwrap()
+            assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3)
+                .unwrap()
         });
     });
 
@@ -341,17 +315,12 @@ fn bench_diagonalization_625z(c: &mut Criterion) {
     let od_refs: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
     let classes = vec![car_asym.clone(), truck_asym.clone()];
     let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr_car, &bpr_truck];
-    let result = assign_diagonalization(
-        &graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3,
-    )
-    .unwrap();
+    let result =
+        assign_diagonalization(&graph, &classes, &od_refs, &vdfs, &config_paths, 10, 1e-3).unwrap();
     if let Some(ref paths) = result.path_flows {
         let car_paths = paths.iter().filter(|p| p.class_index == Some(0)).count();
         let truck_paths = paths.iter().filter(|p| p.class_index == Some(1)).count();
-        println!(
-            "  [diag-625z] car={}, truck={}",
-            car_paths, truck_paths
-        );
+        println!("  [diag-625z] car={}, truck={}", car_paths, truck_paths);
         print_path_memory(paths, "diag-625z");
     }
 

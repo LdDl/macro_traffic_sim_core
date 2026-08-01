@@ -41,7 +41,7 @@
 //! Transportation Science, 16(2), 231-240.
 //! DOI: 10.1287/trsc.16.2.231
 //! Diagonalization for class-specific VDFs (NOT implemented due model limitations).
-//! 
+//!
 //! Model limitations are:
 //! * All classes share the same link cost `t_a(V_a)``, computed on PCU-total volume.
 //! * Per-class cost is a scalar multiple: `c_a^m = ff_mult_m * t_a(V_a)`.
@@ -136,9 +136,13 @@ pub fn assign_multiclass_fw(
 
     if initial_class_volumes.is_none() {
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_volumes[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -154,10 +158,14 @@ pub fn assign_multiclass_fw(
         iteration = iter + 1;
 
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_aux[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -179,7 +187,7 @@ pub fn assign_multiclass_fw(
             break;
         }
 
-        let lambda = line_search(graph, &pcu_total, &pcu_aux, vdf);
+        let lambda = line_search(graph, &pcu_total, &pcu_aux, vdf)?;
 
         for ci in 0..m {
             for i in 0..n {
@@ -189,7 +197,7 @@ pub fn assign_multiclass_fw(
     }
 
     let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-    graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+    graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
     log_main!(
         EVENT_CONVERGENCE,
@@ -244,9 +252,13 @@ pub fn assign_multiclass_msa(
 
     if initial_class_volumes.is_none() {
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_volumes[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -262,10 +274,14 @@ pub fn assign_multiclass_msa(
         iteration = iter + 1;
 
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
         for ci in 0..m {
-            scale_costs(&shared_costs, classes[ci].ff_time_multiplier, &mut class_costs);
+            scale_costs(
+                &shared_costs,
+                classes[ci].ff_time_multiplier,
+                &mut class_costs,
+            );
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrices[ci], &class_costs, &mut class_aux[ci]);
             #[cfg(not(feature = "parallel"))]
@@ -297,7 +313,7 @@ pub fn assign_multiclass_msa(
     }
 
     let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-    graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+    graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
     log_main!(
         EVENT_CONVERGENCE,
@@ -393,11 +409,7 @@ fn init_class_volumes(
     }
 }
 
-fn compute_pcu_total(
-    class_volumes: &[Vec<f64>],
-    classes: &[UserClass],
-    n: usize,
-) -> Vec<f64> {
+fn compute_pcu_total(class_volumes: &[Vec<f64>], classes: &[UserClass], n: usize) -> Vec<f64> {
     let mut total = vec![0.0; n];
     for (ci, vols) in class_volumes.iter().enumerate() {
         let pcu = classes[ci].pcu;
@@ -423,14 +435,14 @@ fn line_search(
     current_pcu: &[f64],
     aux_pcu: &[f64],
     vdf: &dyn VolumeDelayFunction,
-) -> f64 {
+) -> Result<f64, AssignmentError> {
     let mut a = 0.0_f64;
     let mut b = 1.0_f64;
 
     let mut x1 = b - INV_PHI * (b - a);
     let mut x2 = a + INV_PHI * (b - a);
-    let mut f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1);
-    let mut f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2);
+    let mut f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1)?;
+    let mut f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2)?;
 
     for _ in 0..20 {
         if (b - a) < LINE_SEARCH_TOL {
@@ -441,17 +453,17 @@ fn line_search(
             x2 = x1;
             f2 = f1;
             x1 = b - INV_PHI * (b - a);
-            f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1);
+            f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1)?;
         } else {
             a = x1;
             x1 = x2;
             f1 = f2;
             x2 = a + INV_PHI * (b - a);
-            f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2);
+            f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2)?;
         }
     }
 
-    (a + b) / 2.0
+    Ok((a + b) / 2.0)
 }
 
 fn eval_beckmann_at_step(
@@ -460,13 +472,13 @@ fn eval_beckmann_at_step(
     aux_pcu: &[f64],
     vdf: &dyn VolumeDelayFunction,
     lambda: f64,
-) -> f64 {
+) -> Result<f64, AssignmentError> {
     let mut objective = 0.0;
     for i in 0..graph.num_links {
         let vol = current_pcu[i] + lambda * (aux_pcu[i] - current_pcu[i]);
-        objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i]);
+        objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i])?;
     }
-    objective
+    Ok(objective)
 }
 
 fn build_result(
@@ -491,11 +503,7 @@ fn build_result(
 
     let path_flows = if config.store_paths {
         let multipliers: Vec<f64> = classes.iter().map(|c| c.ff_time_multiplier).collect();
-        Some(graph.extract_shortest_paths_multiclass(
-            od_matrices,
-            &multipliers,
-            shared_costs,
-        ))
+        Some(graph.extract_shortest_paths_multiclass(od_matrices, &multipliers, shared_costs))
     } else {
         None
     };
@@ -524,10 +532,20 @@ mod tests {
 
     fn two_link_network() -> (Network, IndexedGraph) {
         let mut net = Network::new();
-        net.add_node(Node::new(1).with_zone_id(1).with_coordinates(0.0, 0.0).build())
-            .unwrap();
-        net.add_node(Node::new(2).with_zone_id(2).with_coordinates(0.0, 1.0).build())
-            .unwrap();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(0.0, 0.0)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(0.0, 1.0)
+                .build(),
+        )
+        .unwrap();
         net.add_link(
             Link::new(100, 1, 2)
                 .with_length_meters(1000.0)
@@ -739,16 +757,12 @@ mod tests {
         let paths = result.path_flows.as_ref().expect("paths should be Some");
         assert_eq!(paths.len(), 2);
 
-        let car_paths: Vec<_> = paths.iter()
-            .filter(|p| p.class_index == Some(0))
-            .collect();
+        let car_paths: Vec<_> = paths.iter().filter(|p| p.class_index == Some(0)).collect();
         assert_eq!(car_paths.len(), 1);
         assert!((car_paths[0].flow - 400.0).abs() < EPS);
         assert_eq!(car_paths[0].link_ids, vec![100]);
 
-        let truck_paths: Vec<_> = paths.iter()
-            .filter(|p| p.class_index == Some(1))
-            .collect();
+        let truck_paths: Vec<_> = paths.iter().filter(|p| p.class_index == Some(1)).collect();
         assert_eq!(truck_paths.len(), 1);
         assert!((truck_paths[0].flow - 100.0).abs() < EPS);
         assert_eq!(truck_paths[0].link_ids, vec![100]);
@@ -781,11 +795,13 @@ mod tests {
         let paths = result.path_flows.as_ref().expect("paths should be Some");
         assert_eq!(paths.len(), 2);
 
-        let car_flow: f64 = paths.iter()
+        let car_flow: f64 = paths
+            .iter()
             .filter(|p| p.class_index == Some(0))
             .map(|p| p.flow)
             .sum();
-        let truck_flow: f64 = paths.iter()
+        let truck_flow: f64 = paths
+            .iter()
             .filter(|p| p.class_index == Some(1))
             .map(|p| p.flow)
             .sum();

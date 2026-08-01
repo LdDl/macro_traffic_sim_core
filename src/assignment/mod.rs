@@ -46,13 +46,13 @@
 //! let bpr = BprFunction::default();
 //!
 //! // Free-flow: 10 min, no volume
-//! assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0), 10.0);
+//! assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0).unwrap(), 10.0);
 //!
 //! // At capacity: t = 10 * (1 + 0.15 * 1^4) = 11.5
-//! assert!((bpr.travel_time(10.0, 1000.0, 1000.0) - 11.5).abs() < 1e-10);
+//! assert!((bpr.travel_time(10.0, 1000.0, 1000.0).unwrap() - 11.5).abs() < 1e-10);
 //!
 //! // Over capacity: congestion grows rapidly
-//! assert!(bpr.travel_time(10.0, 2000.0, 1000.0) > 11.5);
+//! assert!(bpr.travel_time(10.0, 2000.0, 1000.0).unwrap() > 11.5);
 //! ```
 //!
 //! ### Computing the relative gap
@@ -75,12 +75,15 @@ pub mod error;
 pub mod frank_wolfe;
 pub mod gradient_projection;
 pub mod indexed_graph;
+#[cfg(feature = "lua")]
+pub mod lua_vdf;
 pub mod msa;
 pub mod multiclass;
 pub mod od_path;
 pub mod shortest_path;
 
 pub use self::assignment::*;
+pub use self::error::AssignmentError;
 pub use self::indexed_graph::IndexedGraph;
 pub use self::od_path::OdPath;
 pub use self::{frank_wolfe::*, gradient_projection::*, msa::*, shortest_path::*};

@@ -43,7 +43,10 @@ fn generated_grid(grid_side: usize, zone_step: usize) -> (Network, Vec<Zone>) {
     for r in 0..grid_side {
         for c in 0..grid_side {
             let from = node_id(r, c);
-            let (lat1, lon1) = (base_lat + r as f64 * step_deg, base_lon + c as f64 * step_deg);
+            let (lat1, lon1) = (
+                base_lat + r as f64 * step_deg,
+                base_lon + c as f64 * step_deg,
+            );
 
             let mut neigh: Vec<(i64, f64, f64)> = Vec::new();
             if c + 1 < grid_side {
@@ -110,10 +113,7 @@ fn print_path_memory(paths: &[OdPath], label: &str) {
 
     println!("  [{label}] paths: {}", paths.len());
     println!("  [{label}] avg links/path: {:.1}", avg_links);
-    println!(
-        "  [{label}] sizeof(OdPath): {} bytes",
-        struct_size
-    );
+    println!("  [{label}] sizeof(OdPath): {} bytes", struct_size);
     println!(
         "  [{label}] memory: structs={:.2} MB, heap(link_ids)={:.2} MB, total={:.2} MB",
         struct_total as f64 / 1_048_576.0,
@@ -283,10 +283,7 @@ fn bench_store_paths_multi_class(c: &mut Criterion) {
     if let Some(ref paths) = result.assignment.path_flows {
         let car_paths = paths.iter().filter(|p| p.class_index == Some(0)).count();
         let truck_paths = paths.iter().filter(|p| p.class_index == Some(1)).count();
-        println!(
-            "  [multi-class] car={}, truck={}",
-            car_paths, truck_paths
-        );
+        println!("  [multi-class] car={}, truck={}", car_paths, truck_paths);
         print_path_memory(paths, "multi-class");
     }
 

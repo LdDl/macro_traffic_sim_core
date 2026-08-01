@@ -71,8 +71,10 @@ fn main() {
         .with_verbose_level(VerboseLevel::Main)
         .build();
 
-    let result = run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None)
-        .expect("pipeline failed");
+    let result = run_four_step_model(
+        &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+    )
+    .expect("pipeline failed");
 
     // Trip generation results
     for (i, zone) in zones.iter().enumerate() {

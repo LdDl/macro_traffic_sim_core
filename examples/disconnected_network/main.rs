@@ -45,13 +45,22 @@ fn main() {
         .with_verbose_level(VerboseLevel::None)
         .build();
 
-    println!("nodes: {}, links: {}, zones: {}",
-        network.node_count(), network.link_count(), zones.len());
+    println!(
+        "nodes: {}, links: {}, zones: {}",
+        network.node_count(),
+        network.link_count(),
+        zones.len()
+    );
 
-    match run_four_step_model(&network, &zones, &trip_gen, &impedance, &logit, &config, None) {
+    match run_four_step_model(
+        &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+    ) {
         Ok(result) => {
             println!("pipeline succeeded (unexpected)");
-            println!("  feedback iterations done: {}", result.feedback_iterations_done);
+            println!(
+                "  feedback iterations done: {}",
+                result.feedback_iterations_done
+            );
             println!("  assignment converged: {}", result.assignment.converged);
             println!("  relative gap: {:.6}", result.assignment.relative_gap);
         }
@@ -82,8 +91,8 @@ fn build_network() -> Network {
     // zone_id is set so preflight validation passes.
     // Note: node 3 is centroid of zone 4, node 4 is centroid of zone 3.
     let nodes = [
-        (1, 56.8861353328808,  35.901006907224655, 1_i64),
-        (2, 56.88693592938617, 35.90406060218811,  2_i64),
+        (1, 56.8861353328808, 35.901006907224655, 1_i64),
+        (2, 56.88693592938617, 35.90406060218811, 2_i64),
         (3, 56.88649799368358, 35.904288589954376, 4_i64),
         (4, 56.88577504969939, 35.901316702365875, 3_i64),
     ];
@@ -124,10 +133,22 @@ fn build_network() -> Network {
 
 fn build_zones() -> Vec<Zone> {
     vec![
-        Zone::new(1).with_population(100.0).with_employment(15.0).build(),
-        Zone::new(2).with_population(10.0).with_employment(99.0).build(),
-        Zone::new(3).with_population(100.0).with_employment(200.0).build(),
-        Zone::new(4).with_population(190.0).with_employment(22.0).build(),
+        Zone::new(1)
+            .with_population(100.0)
+            .with_employment(15.0)
+            .build(),
+        Zone::new(2)
+            .with_population(10.0)
+            .with_employment(99.0)
+            .build(),
+        Zone::new(3)
+            .with_population(100.0)
+            .with_employment(200.0)
+            .build(),
+        Zone::new(4)
+            .with_population(190.0)
+            .with_employment(22.0)
+            .build(),
     ]
 }
 
