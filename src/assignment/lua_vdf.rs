@@ -10,9 +10,15 @@
 //!
 //! Scripts run in a restricted Lua 5.4 environment:
 //!
-//! * Only the `math`, `string` and `table` standard libraries are
-//!   loaded. There is no `os`, `io`, `debug` or `package`, so scripts
-//!   cannot touch the filesystem, spawn processes or load C code.
+//! * Only the `math` standard library is loaded. There is no `os`,
+//!   `io`, `debug`, `package`, `string` or `table` library, so
+//!   scripts cannot touch the filesystem, spawn processes or load C
+//!   code. The `string`/`table` libraries are excluded because their
+//!   C functions (e.g. pattern matching on a long string) run outside
+//!   the instruction watchdog below; `math` C functions are all
+//!   constant-time. Table constructors and indexing still work - they
+//!   are language features, not library calls - so piecewise/lookup
+//!   formulas remain possible.
 //! * `pcall`, `xpcall`, `load`, `loadstring`, `dofile`, `loadfile`
 //!   and `collectgarbage` are removed from the globals. Without
 //!   `pcall` a script cannot swallow the watchdog errors below.
@@ -137,7 +143,7 @@ impl std::fmt::Debug for LuaVdf {
 impl LuaVdf {
     /// Create a Lua VDF from a script string.
     ///
-    /// Builds a sandboxed Lua 5.4 state (math/string/table only,
+    /// Builds a sandboxed Lua 5.4 state (math stdlib only,
     /// instruction watchdog, memory limit), loads and executes the
     /// script, validates that both `travel_time` and `integral` are
     /// defined as global functions, and runs both on a set of probe
@@ -154,11 +160,8 @@ impl LuaVdf {
     /// errors, does not define the required functions, exceeds the
     /// instruction or memory budget, or fails on any probe input.
     pub fn new(script: &str) -> Result<Self, AssignmentError> {
-        let lua = Lua::new_with(
-            StdLib::MATH | StdLib::STRING | StdLib::TABLE,
-            LuaOptions::default(),
-        )
-        .map_err(|e| AssignmentError::LuaError(format!("sandbox init: {}", e)))?;
+        let lua = Lua::new_with(StdLib::MATH, LuaOptions::default())
+            .map_err(|e| AssignmentError::LuaError(format!("sandbox init: {}", e)))?;
 
         lua.set_memory_limit(MEMORY_LIMIT_BYTES)
             .map_err(|e| AssignmentError::LuaError(format!("memory limit: {}", e)))?;
@@ -426,15 +429,44 @@ mod tests {
     }
 
     #[test]
-    fn os_and_io_are_unavailable() {
+    fn only_math_stdlib_is_available() {
         let script = r#"
             assert(os == nil, "os must not be available")
             assert(io == nil, "io must not be available")
+            assert(string == nil, "string lib must not be available")
+            assert(table == nil, "table lib must not be available")
             assert(pcall == nil, "pcall must not be available")
+            assert(math ~= nil, "math must be available")
             function travel_time(ff, vol, cap) return ff end
             function integral(ff, vol, cap) return ff * vol end
         "#;
         LuaVdf::new(script).unwrap();
+    }
+
+    #[test]
+    fn table_constructors_work_without_table_lib() {
+        // Piecewise/lookup formulas use table literals and indexing,
+        // which are language features and stay available.
+        let script = r#"
+            local breakpoints = { 0.5, 1.0, 1.5 }
+            local factors = { 1.0, 1.2, 1.8, 3.0 }
+            function travel_time(ff, vol, cap)
+                if cap <= 0 then return math.huge end
+                local r = vol / cap
+                for i = 1, #breakpoints do
+                    if r < breakpoints[i] then return ff * factors[i] end
+                end
+                return ff * factors[#factors]
+            end
+            function integral(ff, vol, cap)
+                if cap <= 0 then return math.huge end
+                if vol <= 0 then return 0.0 end
+                return ff * vol
+            end
+        "#;
+        let vdf = LuaVdf::new(script).unwrap();
+        assert_eq!(vdf.travel_time(10.0, 0.0, 1000.0).unwrap(), 10.0);
+        assert_eq!(vdf.travel_time(10.0, 2000.0, 1000.0).unwrap(), 30.0);
     }
 
     #[test]

@@ -132,18 +132,30 @@ globals are available:
 - `math` - full math library (`math.sqrt`, `math.exp`, `math.log`,
   `math.huge`, `math.pi`, etc.; note that Lua 5.4 has no `math.pow`,
   use the `^` operator)
-- `string` - string library (rarely needed for VDFs)
-- `table` - table library
 - `print` - for debugging only
 - `tonumber`, `tostring`, `type`, `error`, `assert`, `pairs`, `ipairs`
 - `^` operator - exponentiation
+- table constructors and indexing (`local t = {1.0, 1.2}; t[i]`) -
+  these are language features, not library calls, so piecewise and
+  lookup-table formulas work as usual
 
 Not available (sandboxed out): `io`, `os`, `debug`, `package`,
-`require`, `coroutine`, `pcall`, `xpcall`, `load`, `loadstring`,
-`loadfile`, `dofile`, `collectgarbage`. VDF scripts cannot read
-files, execute system commands, or load additional code. `pcall` and
-`xpcall` are removed so a script cannot catch the watchdog error
-described below and keep running.
+`require`, `coroutine`, the `string` and `table` libraries, `pcall`,
+`xpcall`, `load`, `loadstring`, `loadfile`, `dofile`,
+`collectgarbage`. VDF scripts cannot read files, execute system
+commands, or load additional code.
+
+Two of these exclusions are watchdog-related rather than
+capability-related:
+
+- `pcall`/`xpcall` are removed so a script cannot catch the watchdog
+  error described below and keep running.
+- The `string`/`table` libraries are removed because the instruction
+  watchdog only counts Lua VM instructions - it cannot interrupt a
+  single long-running C call. String pattern matching (`string.find`
+  with a backtracking-heavy pattern on a long string) is the main
+  such vector. All `math` C functions are constant-time, so with
+  math-only there is no C call that can outrun the watchdog.
 
 ## Sandboxing and resource limits
 
