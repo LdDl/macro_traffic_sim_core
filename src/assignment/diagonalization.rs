@@ -62,8 +62,8 @@ use super::indexed_graph::IndexedGraph;
 use super::multiclass::UserClass;
 use super::od_path::OdPath;
 use super::{
-    AkcelikDelayFunction, AssignmentConfig, AssignmentResult, BprFunction,
-    ConicalDelayFunction, VolumeDelayFunction,
+    AkcelikDelayFunction, AssignmentConfig, AssignmentResult, BprFunction, ConicalDelayFunction,
+    VolumeDelayFunction,
 };
 use crate::log_additional;
 use crate::log_main;
@@ -105,7 +105,12 @@ impl VdfDispatch<'_> {
     }
 
     #[inline]
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn travel_time(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         match self {
             VdfDispatch::Bpr(v) => v.travel_time(free_flow_time, volume, capacity),
             VdfDispatch::Conical(v) => v.travel_time(free_flow_time, volume, capacity),
@@ -115,7 +120,12 @@ impl VdfDispatch<'_> {
     }
 
     #[inline]
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn integral(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         match self {
             VdfDispatch::Bpr(v) => v.integral(free_flow_time, volume, capacity),
             VdfDispatch::Conical(v) => v.integral(free_flow_time, volume, capacity),
@@ -161,7 +171,10 @@ pub fn assign_diagonalization(
     let n = graph.num_links;
     let m = classes.len();
 
-    let dispatched: Vec<VdfDispatch> = class_vdfs.iter().map(|v| VdfDispatch::from_dyn(*v)).collect();
+    let dispatched: Vec<VdfDispatch> = class_vdfs
+        .iter()
+        .map(|v| VdfDispatch::from_dyn(*v))
+        .collect();
 
     let mut class_volumes: Vec<Vec<f64>> = vec![vec![0.0; n]; m];
     let mut costs = vec![0.0; n];
@@ -179,7 +192,7 @@ pub fn assign_diagonalization(
             &background_pcu,
             &dispatched[ci],
             &mut costs,
-        );
+        )?;
         #[cfg(feature = "parallel")]
         graph.all_or_nothing_parallel(od_matrices[ci], &costs, &mut class_volumes[ci]);
         #[cfg(not(feature = "parallel"))]
@@ -222,7 +235,7 @@ pub fn assign_diagonalization(
                 config,
                 &mut costs,
                 &mut aux,
-            );
+            )?;
             total_inner_iterations += inner_iters;
 
             // Update running total with new class volumes
@@ -254,7 +267,7 @@ pub fn assign_diagonalization(
     let mut shared_costs = vec![0.0; n];
     // Final costs: use class 0's VDF on PCU total (for link_costs output).
     // Per-class costs differ - link_costs is an approximation.
-    graph.compute_costs(&pcu_total, class_vdfs[0], &mut shared_costs);
+    graph.compute_costs(&pcu_total, class_vdfs[0], &mut shared_costs)?;
 
     log_main!(
         EVENT_CONVERGENCE,
@@ -293,7 +306,7 @@ fn inner_fw(
     config: &AssignmentConfig,
     costs: &mut [f64],
     aux: &mut [f64],
-) -> usize {
+) -> Result<usize, AssignmentError> {
     let n = graph.num_links;
     let mut iteration = 0;
 
@@ -308,7 +321,7 @@ fn inner_fw(
             background_pcu,
             vdf,
             costs,
-        );
+        )?;
 
         #[cfg(feature = "parallel")]
         graph.all_or_nothing_parallel(od_matrix, costs, aux);
@@ -333,16 +346,15 @@ fn inner_fw(
             break;
         }
 
-        let lambda = line_search_with_background(
-            graph, class_volumes, aux, pcu, background_pcu, vdf,
-        );
+        let lambda =
+            line_search_with_background(graph, class_volumes, aux, pcu, background_pcu, vdf)?;
 
         for i in 0..n {
             class_volumes[i] += lambda * (aux[i] - class_volumes[i]);
         }
     }
 
-    iteration
+    Ok(iteration)
 }
 
 /// Compute per-class costs: ff_mult * vdf(background + volume * pcu).
@@ -354,19 +366,16 @@ fn compute_class_costs(
     background_pcu: &[f64],
     vdf: &VdfDispatch,
     out: &mut [f64],
-) {
+) -> Result<(), AssignmentError> {
     for i in 0..graph.num_links {
         let total_vol = background_pcu[i] + class_volumes[i] * pcu;
         out[i] = ff_time_multiplier
-            * vdf.travel_time(graph.link_ff_time[i], total_vol, graph.link_capacity[i]);
+            * vdf.travel_time(graph.link_ff_time[i], total_vol, graph.link_capacity[i])?;
     }
+    Ok(())
 }
 
-fn compute_pcu_total(
-    class_volumes: &[Vec<f64>],
-    classes: &[UserClass],
-    n: usize,
-) -> Vec<f64> {
+fn compute_pcu_total(class_volumes: &[Vec<f64>], classes: &[UserClass], n: usize) -> Vec<f64> {
     let mut total = vec![0.0; n];
     for (ci, vols) in class_volumes.iter().enumerate() {
         let pcu = classes[ci].pcu;
@@ -385,24 +394,23 @@ fn line_search_with_background(
     pcu: f64,
     background_pcu: &[f64],
     vdf: &VdfDispatch,
-) -> f64 {
-    let eval = |lambda: f64| -> f64 {
+) -> Result<f64, AssignmentError> {
+    let eval = |lambda: f64| -> Result<f64, AssignmentError> {
         let mut objective = 0.0;
         for i in 0..graph.num_links {
             let vol = current[i] + lambda * (aux_vols[i] - current[i]);
             let total = background_pcu[i] + vol * pcu;
-            objective +=
-                vdf.integral(graph.link_ff_time[i], total, graph.link_capacity[i]);
+            objective += vdf.integral(graph.link_ff_time[i], total, graph.link_capacity[i])?;
         }
-        objective
+        Ok(objective)
     };
 
     let mut a = 0.0_f64;
     let mut b = 1.0_f64;
     let mut x1 = b - INV_PHI * (b - a);
     let mut x2 = a + INV_PHI * (b - a);
-    let mut f1 = eval(x1);
-    let mut f2 = eval(x2);
+    let mut f1 = eval(x1)?;
+    let mut f2 = eval(x2)?;
 
     for _ in 0..20 {
         if (b - a) < TOL {
@@ -413,25 +421,21 @@ fn line_search_with_background(
             x2 = x1;
             f2 = f1;
             x1 = b - INV_PHI * (b - a);
-            f1 = eval(x1);
+            f1 = eval(x1)?;
         } else {
             a = x1;
             x1 = x2;
             f1 = f2;
             x2 = a + INV_PHI * (b - a);
-            f2 = eval(x2);
+            f2 = eval(x2)?;
         }
     }
 
-    (a + b) / 2.0
+    Ok((a + b) / 2.0)
 }
 
 /// Max relative change across all class volumes between iterations.
-fn max_relative_change(
-    prev: &[Vec<f64>],
-    curr: &[Vec<f64>],
-    n: usize,
-) -> f64 {
+fn max_relative_change(prev: &[Vec<f64>], curr: &[Vec<f64>], n: usize) -> f64 {
     let mut max_change = 0.0_f64;
     for ci in 0..prev.len() {
         let mut sum_diff_sq = 0.0;
@@ -517,7 +521,7 @@ fn build_result(
             od_matrices,
             class_vdfs,
             pcu_total,
-        ))
+        )?)
     } else {
         None
     };
@@ -525,7 +529,7 @@ fn build_result(
     // link_costs: per-class costs differ, so we store the base shared
     // cost t_a(V_a) using class 0's VDF.
     let mut shared_costs = vec![0.0; graph.num_links];
-    graph.compute_costs(pcu_total, class_vdfs[0], &mut shared_costs);
+    graph.compute_costs(pcu_total, class_vdfs[0], &mut shared_costs)?;
 
     Ok(AssignmentResult {
         link_volumes: graph.volumes_to_hashmap(pcu_total),
@@ -549,7 +553,7 @@ fn extract_paths_per_class(
     od_matrices: &[&dyn OdMatrix],
     class_vdfs: &[&dyn VolumeDelayFunction],
     pcu_total: &[f64],
-) -> Vec<OdPath> {
+) -> Result<Vec<OdPath>, AssignmentError> {
     let zone_ids = graph.zone_ids().to_vec();
     let zone_node_idxs: Vec<Option<usize>> =
         zone_ids.iter().map(|&z| graph.zone_node_idx(z)).collect();
@@ -568,7 +572,7 @@ fn extract_paths_per_class(
                     graph.link_ff_time[i],
                     pcu_total[i],
                     graph.link_capacity[i],
-                );
+                )?;
         }
 
         for (oi, &origin_zone) in zone_ids.iter().enumerate() {
@@ -630,7 +634,7 @@ fn extract_paths_per_class(
         }
     }
 
-    paths
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -640,8 +644,8 @@ mod tests {
     use crate::gmns::meso::link::Link;
     use crate::gmns::meso::network::Network;
     use crate::gmns::meso::node::Node;
-    use crate::od::dense::DenseOdMatrix;
     use crate::od::OdMatrix;
+    use crate::od::dense::DenseOdMatrix;
 
     const EPS: f64 = 1e-4;
 
@@ -703,10 +707,9 @@ mod tests {
             store_paths: false,
         };
 
-        let result = assign_diagonalization(
-            &graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4,
-        )
-        .unwrap();
+        let result =
+            assign_diagonalization(&graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4)
+                .unwrap();
 
         assert!(result.converged);
 
@@ -743,10 +746,9 @@ mod tests {
             store_paths: false,
         };
 
-        let result = assign_diagonalization(
-            &graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4,
-        )
-        .unwrap();
+        let result =
+            assign_diagonalization(&graph, &classes, &od_matrices, &vdfs, &config, 20, 1e-4)
+                .unwrap();
 
         assert!(result.converged);
 
@@ -812,9 +814,7 @@ mod tests {
         let vdfs: Vec<&dyn VolumeDelayFunction> = vec![&bpr, &bpr];
 
         let config = AssignmentConfig::default();
-        let result = assign_diagonalization(
-            &graph, &[car], &od_matrices, &vdfs, &config, 10, 1e-4,
-        );
+        let result = assign_diagonalization(&graph, &[car], &od_matrices, &vdfs, &config, 10, 1e-4);
         assert!(result.is_err());
     }
 }

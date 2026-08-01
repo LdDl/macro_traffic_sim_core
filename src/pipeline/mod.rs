@@ -57,9 +57,9 @@
 //! - **Speed-based time skim** -- distance / fixed speed, used for
 //!   non-motorized modes (BIKE at 15 km/h, WALK at 5 km/h).
 
+mod connectivity;
 pub mod error;
 pub mod phase;
-mod connectivity;
 mod pipeline;
 
 pub use self::phase::{PipelinePhase, ProgressEvent};

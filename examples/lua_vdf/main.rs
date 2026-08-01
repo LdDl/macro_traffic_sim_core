@@ -35,8 +35,8 @@ use macro_traffic_sim_core::assignment::{
 use macro_traffic_sim_core::gmns::meso::link::Link;
 use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
-use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::pipeline::haversine_km;
 
 const TRUCK_LUA_BPR: &str = r#"
@@ -83,19 +83,15 @@ fn main() {
     let od_car = DenseOdMatrix::from_data(
         zones.clone(),
         vec![
-            0.0, 2000.0, 3000.0, 4000.0,
-            1500.0, 0.0, 1000.0, 2500.0,
-            2000.0, 1500.0, 0.0, 3500.0,
+            0.0, 2000.0, 3000.0, 4000.0, 1500.0, 0.0, 1000.0, 2500.0, 2000.0, 1500.0, 0.0, 3500.0,
             1000.0, 2000.0, 2500.0, 0.0,
         ],
     );
     let od_truck = DenseOdMatrix::from_data(
         zones.clone(),
         vec![
-            0.0, 200.0, 300.0, 500.0,
-            150.0, 0.0, 100.0, 300.0,
-            200.0, 150.0, 0.0, 400.0,
-            100.0, 250.0, 300.0, 0.0,
+            0.0, 200.0, 300.0, 500.0, 150.0, 0.0, 100.0, 300.0, 200.0, 150.0, 0.0, 400.0, 100.0,
+            250.0, 300.0, 0.0,
         ],
     );
     let od_matrices: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
@@ -145,7 +141,10 @@ fn main() {
     volumes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     for (id, vol) in volumes.iter().take(10) {
         let cost = result.link_costs.get(id).copied().unwrap_or(0.0);
-        println!("  link {:>4}: volume={:.1} PCU, cost={:.4} h", id, vol, cost);
+        println!(
+            "  link {:>4}: volume={:.1} PCU, cost={:.4} h",
+            id, vol, cost
+        );
     }
 
     let paths = match result.path_flows.as_ref() {
@@ -174,9 +173,7 @@ fn main() {
         let class_paths: Vec<_> = paths
             .iter()
             .filter(|p| {
-                p.origin_zone == origin
-                    && p.dest_zone == dest
-                    && p.class_index == Some(ci as u16)
+                p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(ci as u16)
             })
             .collect();
 

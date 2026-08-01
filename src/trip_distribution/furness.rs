@@ -176,18 +176,15 @@ pub fn furness_balance_with_buffers(
     for iteration in 0..config.max_iterations {
         // Row scaling
         #[cfg(feature = "parallel")]
-        matrix
-            .par_chunks_mut(n)
-            .enumerate()
-            .for_each(|(i, row)| {
-                let row_sum: f64 = row.iter().sum();
-                if row_sum > 0.0 && target_productions[i] > 0.0 {
-                    let factor = target_productions[i] / row_sum;
-                    for v in row.iter_mut() {
-                        *v *= factor;
-                    }
+        matrix.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+            let row_sum: f64 = row.iter().sum();
+            if row_sum > 0.0 && target_productions[i] > 0.0 {
+                let factor = target_productions[i] / row_sum;
+                for v in row.iter_mut() {
+                    *v *= factor;
                 }
-            });
+            }
+        });
         #[cfg(not(feature = "parallel"))]
         for i in 0..n {
             let row = &mut matrix[i * n..(i + 1) * n];
@@ -281,7 +278,8 @@ pub fn furness_balance_with_buffers(
                 if target_productions[i] > 0.0 {
                     let row = &matrix[i * n..(i + 1) * n];
                     let row_sum: f64 = row.iter().sum();
-                    err = err.max(((row_sum - target_productions[i]) / target_productions[i]).abs());
+                    err =
+                        err.max(((row_sum - target_productions[i]) / target_productions[i]).abs());
                 }
             }
             err

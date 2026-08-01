@@ -33,12 +33,14 @@ use std::collections::HashMap;
 
 use macro_traffic_sim_core::assignment::diagonalization::assign_diagonalization;
 use macro_traffic_sim_core::assignment::multiclass::UserClass;
-use macro_traffic_sim_core::assignment::{AssignmentConfig, BprFunction, IndexedGraph, VolumeDelayFunction};
+use macro_traffic_sim_core::assignment::{
+    AssignmentConfig, BprFunction, IndexedGraph, VolumeDelayFunction,
+};
 use macro_traffic_sim_core::gmns::meso::link::Link;
 use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
-use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::od::dense::DenseOdMatrix;
 use macro_traffic_sim_core::pipeline::haversine_km;
 
 fn main() {
@@ -71,19 +73,15 @@ fn main() {
     let od_car = DenseOdMatrix::from_data(
         zones.clone(),
         vec![
-            0.0, 2000.0, 3000.0, 4000.0,
-            1500.0, 0.0, 1000.0, 2500.0,
-            2000.0, 1500.0, 0.0, 3500.0,
+            0.0, 2000.0, 3000.0, 4000.0, 1500.0, 0.0, 1000.0, 2500.0, 2000.0, 1500.0, 0.0, 3500.0,
             1000.0, 2000.0, 2500.0, 0.0,
         ],
     );
     let od_truck = DenseOdMatrix::from_data(
         zones.clone(),
         vec![
-            0.0, 200.0, 300.0, 500.0,
-            150.0, 0.0, 100.0, 300.0,
-            200.0, 150.0, 0.0, 400.0,
-            100.0, 250.0, 300.0, 0.0,
+            0.0, 200.0, 300.0, 500.0, 150.0, 0.0, 100.0, 300.0, 200.0, 150.0, 0.0, 400.0, 100.0,
+            250.0, 300.0, 0.0,
         ],
     );
     let od_matrices: Vec<&dyn OdMatrix> = vec![&od_car, &od_truck];
@@ -135,7 +133,10 @@ fn main() {
     volumes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     for (id, vol) in volumes.iter().take(10) {
         let cost = result.link_costs.get(id).copied().unwrap_or(0.0);
-        println!("  link {:>4}: volume={:.1} PCU, cost={:.4} h", id, vol, cost);
+        println!(
+            "  link {:>4}: volume={:.1} PCU, cost={:.4} h",
+            id, vol, cost
+        );
     }
 
     // Per-class cost comparison on the same link
@@ -145,8 +146,8 @@ fn main() {
     if let Some(&(top_link, top_vol)) = volumes.first() {
         let ff_time = 0.014; // approximate for ~840m at 60 km/h
         let cap = 3600.0; // 2 lanes * 1800
-        let car_cost = bpr_car.travel_time(ff_time, top_vol, cap);
-        let truck_cost = bpr_truck.travel_time(ff_time, top_vol, cap);
+        let car_cost = bpr_car.travel_time(ff_time, top_vol, cap).unwrap();
+        let truck_cost = bpr_truck.travel_time(ff_time, top_vol, cap).unwrap();
         println!(
             "Link {}: car_cost={:.6} h, truck_cost={:.6} h, ratio={:.2}",
             top_link,
@@ -169,7 +170,10 @@ fn main() {
 
     // Count paths per class
     for (ci, name) in class_names.iter().enumerate() {
-        let count = paths.iter().filter(|p| p.class_index == Some(ci as u16)).count();
+        let count = paths
+            .iter()
+            .filter(|p| p.class_index == Some(ci as u16))
+            .count();
         println!("  {}: {} paths", name, count);
     }
 
@@ -182,9 +186,7 @@ fn main() {
         let class_paths: Vec<_> = paths
             .iter()
             .filter(|p| {
-                p.origin_zone == origin
-                    && p.dest_zone == dest
-                    && p.class_index == Some(ci as u16)
+                p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(ci as u16)
             })
             .collect();
 
@@ -199,20 +201,12 @@ fn main() {
     // Check if paths differ between classes
     let car_links: Vec<_> = paths
         .iter()
-        .filter(|p| {
-            p.origin_zone == origin
-                && p.dest_zone == dest
-                && p.class_index == Some(0)
-        })
+        .filter(|p| p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(0))
         .map(|p| &p.link_ids)
         .collect();
     let truck_links: Vec<_> = paths
         .iter()
-        .filter(|p| {
-            p.origin_zone == origin
-                && p.dest_zone == dest
-                && p.class_index == Some(1)
-        })
+        .filter(|p| p.origin_zone == origin && p.dest_zone == dest && p.class_index == Some(1))
         .map(|p| &p.link_ids)
         .collect();
 
@@ -220,7 +214,10 @@ fn main() {
         if car_links[0] == truck_links[0] {
             println!("  -> Same route for both classes (VDF difference not large enough)");
         } else {
-            println!("  -> Different routes! Car: {:?}, Truck: {:?}", car_links[0], truck_links[0]);
+            println!(
+                "  -> Different routes! Car: {:?}, Truck: {:?}",
+                car_links[0], truck_links[0]
+            );
         }
     }
 
@@ -249,10 +246,7 @@ fn main() {
             Some(i) => class_names[*i as usize],
             None => "all",
         };
-        println!(
-            "  {} -> {} [{}]: flow={:.1}",
-            o, d, name, flow
-        );
+        println!("  {} -> {} [{}]: flow={:.1}", o, d, name, flow);
         total += flow;
     }
     println!("  Total through link {}: {:.1}", target_link, total);

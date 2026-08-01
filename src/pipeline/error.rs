@@ -146,10 +146,7 @@ impl fmt::Display for InvalidInputReason {
                 )
             }
             InvalidInputReason::DisconnectedComponents { components } => {
-                let parts: Vec<String> = components
-                    .iter()
-                    .map(|c| format!("{:?}", c))
-                    .collect();
+                let parts: Vec<String> = components.iter().map(|c| format!("{:?}", c)).collect();
                 write!(
                     f,
                     "{} disconnected zone components detected: Furness requires every zone \
