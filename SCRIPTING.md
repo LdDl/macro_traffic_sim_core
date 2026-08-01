@@ -1,6 +1,6 @@
 # Lua Scripting for Volume-Delay Functions
 
-This document describes how to write custom volume-delay functions (VDFs) using [Lua](https://www.lua.org/). The engine embeds [LuaJIT](https://luajit.org/) (Lua 5.1 compatible, with select 5.2 extensions), so Lua scripts run inside the same process with no IPC (inter-process communication) overhead.
+This document describes how to write custom volume-delay functions (VDFs) using [Lua](https://www.lua.org/). The engine embeds Lua 5.4 (vendored, via the [mlua crate](https://crates.io/crates/mlua)), so Lua scripts run inside the same process with no IPC (inter-process communication) overhead. Vanilla Lua 5.4 was chosen over LuaJIT deliberately: it supports reliable instruction-count watchdog hooks and allocator memory limits, which make the sandbox airtight (see "Sandboxing and resource limits" below).
 
 ## Why Lua
 
@@ -126,27 +126,62 @@ remove them from the signature.
 
 ## Available Lua environment
 
-The script runs in a standard LuaJIT environment. The following
+The script runs in a sandboxed Lua 5.4 environment. The following
 globals are available:
 
 - `math` - full math library (`math.sqrt`, `math.exp`, `math.log`,
-  `math.pow`, `math.huge`, `math.pi`, etc.)
+  `math.huge`, `math.pi`, etc.; note that Lua 5.4 has no `math.pow`,
+  use the `^` operator)
 - `string` - string library (rarely needed for VDFs)
 - `table` - table library
-- `print` - for debugging only; output goes to stderr
-- `tonumber`, `tostring`, `type`, `error`, `pcall`
-- `^` operator - exponentiation (`x^4` is `math.pow(x, 4)`)
+- `print` - for debugging only
+- `tonumber`, `tostring`, `type`, `error`, `assert`, `pairs`, `ipairs`
+- `^` operator - exponentiation
 
-Not available (sandboxed out): `io`, `os`, `require`, `loadfile`,
-`dofile`. VDF scripts cannot read files or execute system commands.
+Not available (sandboxed out): `io`, `os`, `debug`, `package`,
+`require`, `coroutine`, `pcall`, `xpcall`, `load`, `loadstring`,
+`loadfile`, `dofile`, `collectgarbage`. VDF scripts cannot read
+files, execute system commands, or load additional code. `pcall` and
+`xpcall` are removed so a script cannot catch the watchdog error
+described below and keep running.
+
+## Sandboxing and resource limits
+
+A hostile or buggy script cannot hang or crash the host process:
+
+1. **Instruction budget.**
+
+    A watchdog hook aborts any single `travel_time`/`integral` call that executes more than 1,000,000 Lua VM instructions. A typical formula needs well under a thousand, so legitimate scripts (including numerical integration with hundreds of subdivisions) never come close. An infinite loop (`while true do end`) is cut off in well under a millisecond and surfaces as `AssignmentError::LuaError`.
+
+2. **Memory limit.**
+
+    The Lua allocator is capped at 64 MiB. A runaway string or table (`s = s .. s` in a loop) fails with an allocation error instead of exhausting host memory.
+
+3. **Recursion.**
+
+    Unbounded recursion is stopped by Lua's own stack check ("stack overflow") and reported as a regular error.
+
+4. **Probe validation.**
+
+    `LuaVdf::new` runs both functions on probe inputs (free flow, mid load, at capacity, over capacity, and zero capacity) before accepting the script. Most broken scripts fail at construction time, not in the middle of a 40-minute assignment.
+
+    All of these surface as `AssignmentError::LuaError` with the inputs and the Lua error message included, e.g.:
+
+    ```
+    lua error: travel_time(ff=10, vol=500, cap=1000) failed: script
+    exceeded the budget of 1000000 VM instructions per call (infinite loop?)
+    ```
 
 ## Script lifecycle
 
 1. The script is loaded and executed once at initialization.
    Top-level code runs at this point (e.g., `local alpha = 0.15`).
-2. `travel_time` and `integral` are called many times during
+2. Both functions are validated on probe inputs (see "Sandboxing and
+   resource limits"). A script that errors on any probe input is
+   rejected at construction time.
+3. `travel_time` and `integral` are called many times during
    assignment - potentially millions of times on large networks.
-3. The Lua state persists for the lifetime of the assignment run.
+4. The Lua state persists for the lifetime of the assignment run.
    Global variables set at the top level remain available across calls.
 
 Top-level computation (e.g., precomputing derived constants) runs once
@@ -200,14 +235,11 @@ Lua VDFs are slower than native Rust VDFs. Benchmark results on a
 
 | Scenario | Time | vs native |
 |----------|------|-----------|
-| Both classes native BPR | 10.5 ms | baseline |
-| One class Lua, one native | 29.9 ms | x2.9 |
-| Both classes Lua | 89.2 ms | x8.5 |
+| Both classes native BPR | 10.6 ms | baseline |
+| One class Lua, one native | 18.9 ms | x1.8 |
+| Both classes Lua | 69.0 ms | x6.5 |
 
-Per-call overhead: ~120 ns (Lua/LuaJIT) vs ~2.6 ns (native Rust),
-roughly 46x per individual call. The full-algorithm slowdown is
-smaller because Dijkstra shortest-path (the dominant cost) does not
-call the VDF.
+Per-call overhead: ~86 ns (Lua 5.4, including the watchdog hook) vs ~2.5 ns (native Rust), roughly 35x per individual call. The full-algorithm slowdown is smaller because Dijkstra shortest-path (the dominant cost) does not call the VDF.
 
 ### When the overhead matters
 
@@ -227,8 +259,8 @@ call the VDF.
 - Precompute constants at the top level, not inside the function.
 - Avoid creating tables or strings inside `travel_time`/`integral`.
 - Use local variables (`local x = ...`) instead of globals inside
-  hot functions - LuaJIT optimizes locals better.
-- `x^4` is faster than `math.pow(x, 4)` in LuaJIT.
+  hot functions - local access is faster in the Lua VM.
+- Use the `^` operator for exponentiation (Lua 5.4 has no `math.pow`).
 
 ## Validation
 
@@ -256,11 +288,17 @@ Before using a Lua VDF in production, verify:
 
 | Error | When | Effect |
 |-------|------|--------|
-| Script syntax error | Load time | Assignment fails immediately |
-| `travel_time` not defined | First call | Assignment fails immediately |
-| `integral` not defined | First line search | Assignment fails immediately |
-| Function returns nil | Call time | Assignment fails with Lua error |
-| Function errors (division by zero, etc.) | Call time | Assignment fails with Lua error |
+| Script syntax error | Load time | `LuaVdf::new` fails |
+| `travel_time` not defined | Load time | `LuaVdf::new` fails |
+| `integral` not defined | Load time | `LuaVdf::new` fails |
+| Function returns nil / errors on a probe input | Load time (probe validation) | `LuaVdf::new` fails |
+| Function returns nil at call time | Call time | Assignment stops with Lua error |
+| Function errors (calls `error()`, etc.) | Call time | Assignment stops with Lua error |
+| Instruction budget exceeded (infinite loop) | Call time | Assignment stops with Lua error |
+| Memory limit exceeded | Call time | Assignment stops with Lua error |
+| Stack overflow (unbounded recursion) | Call time | Assignment stops with Lua error |
 
-All errors propagate as `AssignmentError::LuaError` with the Lua
-error message included.
+All errors propagate as `AssignmentError::LuaError` with the failing
+inputs and the Lua error message included. Since `travel_time` and
+`integral` return `Result`, a failing script aborts the assignment
+cleanly - it can never silently corrupt volumes with NaN.

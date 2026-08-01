@@ -136,7 +136,7 @@ pub fn assign_multiclass_fw(
 
     if initial_class_volumes.is_none() {
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
         for ci in 0..m {
             scale_costs(
                 &shared_costs,
@@ -158,7 +158,7 @@ pub fn assign_multiclass_fw(
         iteration = iter + 1;
 
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
         for ci in 0..m {
             scale_costs(
@@ -187,7 +187,7 @@ pub fn assign_multiclass_fw(
             break;
         }
 
-        let lambda = line_search(graph, &pcu_total, &pcu_aux, vdf);
+        let lambda = line_search(graph, &pcu_total, &pcu_aux, vdf)?;
 
         for ci in 0..m {
             for i in 0..n {
@@ -197,7 +197,7 @@ pub fn assign_multiclass_fw(
     }
 
     let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-    graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+    graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
     log_main!(
         EVENT_CONVERGENCE,
@@ -252,7 +252,7 @@ pub fn assign_multiclass_msa(
 
     if initial_class_volumes.is_none() {
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
         for ci in 0..m {
             scale_costs(
                 &shared_costs,
@@ -274,7 +274,7 @@ pub fn assign_multiclass_msa(
         iteration = iter + 1;
 
         let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-        graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+        graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
         for ci in 0..m {
             scale_costs(
@@ -313,7 +313,7 @@ pub fn assign_multiclass_msa(
     }
 
     let pcu_total = compute_pcu_total(&class_volumes, classes, n);
-    graph.compute_costs(&pcu_total, vdf, &mut shared_costs);
+    graph.compute_costs(&pcu_total, vdf, &mut shared_costs)?;
 
     log_main!(
         EVENT_CONVERGENCE,
@@ -435,14 +435,14 @@ fn line_search(
     current_pcu: &[f64],
     aux_pcu: &[f64],
     vdf: &dyn VolumeDelayFunction,
-) -> f64 {
+) -> Result<f64, AssignmentError> {
     let mut a = 0.0_f64;
     let mut b = 1.0_f64;
 
     let mut x1 = b - INV_PHI * (b - a);
     let mut x2 = a + INV_PHI * (b - a);
-    let mut f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1);
-    let mut f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2);
+    let mut f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1)?;
+    let mut f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2)?;
 
     for _ in 0..20 {
         if (b - a) < LINE_SEARCH_TOL {
@@ -453,17 +453,17 @@ fn line_search(
             x2 = x1;
             f2 = f1;
             x1 = b - INV_PHI * (b - a);
-            f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1);
+            f1 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x1)?;
         } else {
             a = x1;
             x1 = x2;
             f1 = f2;
             x2 = a + INV_PHI * (b - a);
-            f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2);
+            f2 = eval_beckmann_at_step(graph, current_pcu, aux_pcu, vdf, x2)?;
         }
     }
 
-    (a + b) / 2.0
+    Ok((a + b) / 2.0)
 }
 
 fn eval_beckmann_at_step(
@@ -472,13 +472,13 @@ fn eval_beckmann_at_step(
     aux_pcu: &[f64],
     vdf: &dyn VolumeDelayFunction,
     lambda: f64,
-) -> f64 {
+) -> Result<f64, AssignmentError> {
     let mut objective = 0.0;
     for i in 0..graph.num_links {
         let vol = current_pcu[i] + lambda * (aux_pcu[i] - current_pcu[i]);
-        objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i]);
+        objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i])?;
     }
-    objective
+    Ok(objective)
 }
 
 fn build_result(

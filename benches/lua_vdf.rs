@@ -127,8 +127,8 @@ fn bench_vdf_micro(c: &mut Criterion) {
     let lua_vdf = LuaVdf::new(&lua_bpr_script(0.15, 4.0)).unwrap();
 
     for vol in [0.0, 500.0, 1000.0, 2000.0] {
-        let n = native.travel_time(10.0, vol, 1000.0);
-        let l = lua_vdf.travel_time(10.0, vol, 1000.0);
+        let n = native.travel_time(10.0, vol, 1000.0).unwrap();
+        let l = lua_vdf.travel_time(10.0, vol, 1000.0).unwrap();
         assert!(
             (n - l).abs() < 1e-10,
             "travel_time mismatch at vol={}: native={}, lua={}",
@@ -145,7 +145,7 @@ fn bench_vdf_micro(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0.0;
             for i in 0..1000 {
-                sum += native.travel_time(10.0, i as f64 * 2.0, 1000.0);
+                sum += native.travel_time(10.0, i as f64 * 2.0, 1000.0).unwrap();
             }
             sum
         });
@@ -155,7 +155,7 @@ fn bench_vdf_micro(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0.0;
             for i in 0..1000 {
-                sum += lua_vdf.travel_time(10.0, i as f64 * 2.0, 1000.0);
+                sum += lua_vdf.travel_time(10.0, i as f64 * 2.0, 1000.0).unwrap();
             }
             sum
         });

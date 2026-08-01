@@ -423,10 +423,11 @@ impl IndexedGraph {
         volumes: &[f64],
         vdf: &dyn crate::assignment::VolumeDelayFunction,
         out: &mut [f64],
-    ) {
+    ) -> Result<(), crate::assignment::AssignmentError> {
         for i in 0..self.num_links {
-            out[i] = vdf.travel_time(self.link_ff_time[i], volumes[i], self.link_capacity[i]);
+            out[i] = vdf.travel_time(self.link_ff_time[i], volumes[i], self.link_capacity[i])?;
         }
+        Ok(())
     }
 
     /// Compute relative gap.
@@ -877,7 +878,9 @@ mod tests {
     fn free_flow_costs(graph: &IndexedGraph) -> Vec<f64> {
         let bpr = BprFunction::default();
         let mut costs = vec![0.0; graph.num_links];
-        graph.compute_costs(&vec![0.0; graph.num_links], &bpr, &mut costs);
+        graph
+            .compute_costs(&vec![0.0; graph.num_links], &bpr, &mut costs)
+            .unwrap();
         costs
     }
 

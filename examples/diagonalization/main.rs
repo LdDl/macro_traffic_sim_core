@@ -146,8 +146,8 @@ fn main() {
     if let Some(&(top_link, top_vol)) = volumes.first() {
         let ff_time = 0.014; // approximate for ~840m at 60 km/h
         let cap = 3600.0; // 2 lanes * 1800
-        let car_cost = bpr_car.travel_time(ff_time, top_vol, cap);
-        let truck_cost = bpr_truck.travel_time(ff_time, top_vol, cap);
+        let car_cost = bpr_car.travel_time(ff_time, top_vol, cap).unwrap();
+        let truck_cost = bpr_truck.travel_time(ff_time, top_vol, cap).unwrap();
         println!(
             "Link {}: car_cost={:.6} h, truck_cost={:.6} h, ratio={:.2}",
             top_link,

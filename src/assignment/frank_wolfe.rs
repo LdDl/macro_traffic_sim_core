@@ -91,14 +91,14 @@ impl FrankWolfe {
         current: &[f64],
         auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
-    ) -> f64 {
+    ) -> Result<f64, AssignmentError> {
         let mut a = 0.0_f64;
         let mut b = 1.0_f64;
 
         let mut x1 = b - INV_PHI * (b - a);
         let mut x2 = a + INV_PHI * (b - a);
-        let mut f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1);
-        let mut f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2);
+        let mut f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1)?;
+        let mut f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2)?;
 
         for _ in 0..20 {
             if (b - a) < TOL {
@@ -109,17 +109,17 @@ impl FrankWolfe {
                 x2 = x1;
                 f2 = f1;
                 x1 = b - INV_PHI * (b - a);
-                f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1);
+                f1 = Self::eval_at_step(graph, current, auxiliary, vdf, x1)?;
             } else {
                 a = x1;
                 x1 = x2;
                 f1 = f2;
                 x2 = a + INV_PHI * (b - a);
-                f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2);
+                f2 = Self::eval_at_step(graph, current, auxiliary, vdf, x2)?;
             }
         }
 
-        (a + b) / 2.0
+        Ok((a + b) / 2.0)
     }
 
     /// Evaluate the Beckmann objective at a given step size.
@@ -129,13 +129,13 @@ impl FrankWolfe {
         auxiliary: &[f64],
         vdf: &dyn VolumeDelayFunction,
         lambda: f64,
-    ) -> f64 {
+    ) -> Result<f64, AssignmentError> {
         let mut objective = 0.0;
         for i in 0..graph.num_links {
             let vol = current[i] + lambda * (auxiliary[i] - current[i]);
-            objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i]);
+            objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i])?;
         }
-        objective
+        Ok(objective)
     }
 }
 
@@ -173,7 +173,7 @@ impl AssignmentMethod for FrankWolfe {
 
         if initial_volumes.is_none() {
             // Step 0 (cold start): AON at free-flow costs
-            graph.compute_costs(&volumes, vdf, &mut costs);
+            graph.compute_costs(&volumes, vdf, &mut costs)?;
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrix, &costs, &mut volumes);
             #[cfg(not(feature = "parallel"))]
@@ -188,7 +188,7 @@ impl AssignmentMethod for FrankWolfe {
             iteration = iter + 1;
 
             // Update link costs with current volumes
-            graph.compute_costs(&volumes, vdf, &mut costs);
+            graph.compute_costs(&volumes, vdf, &mut costs)?;
 
             // All-or-nothing with current costs
             #[cfg(feature = "parallel")]
@@ -211,7 +211,7 @@ impl AssignmentMethod for FrankWolfe {
             }
 
             // Line search for optimal step size
-            let lambda = Self::line_search(&graph, &volumes, &aux_volumes, vdf);
+            let lambda = Self::line_search(graph, &volumes, &aux_volumes, vdf)?;
 
             // Update volumes: x = x + lambda * (y - x)
             for i in 0..n {
@@ -220,7 +220,7 @@ impl AssignmentMethod for FrankWolfe {
         }
 
         // Final cost computation
-        graph.compute_costs(&volumes, vdf, &mut costs);
+        graph.compute_costs(&volumes, vdf, &mut costs)?;
 
         log_main!(
             EVENT_CONVERGENCE,

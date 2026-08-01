@@ -98,7 +98,7 @@ impl AssignmentMethod for Msa {
 
         if initial_volumes.is_none() {
             // Step 0 (cold start): AON at free-flow costs
-            graph.compute_costs(&volumes, vdf, &mut costs);
+            graph.compute_costs(&volumes, vdf, &mut costs)?;
             #[cfg(feature = "parallel")]
             graph.all_or_nothing_parallel(od_matrix, &costs, &mut volumes);
             #[cfg(not(feature = "parallel"))]
@@ -113,7 +113,7 @@ impl AssignmentMethod for Msa {
             iteration = iter + 1;
 
             // Update link costs
-            graph.compute_costs(&volumes, vdf, &mut costs);
+            graph.compute_costs(&volumes, vdf, &mut costs)?;
 
             // All-or-nothing with current costs
             #[cfg(feature = "parallel")]
@@ -145,7 +145,7 @@ impl AssignmentMethod for Msa {
         }
 
         // Final cost computation
-        graph.compute_costs(&volumes, vdf, &mut costs);
+        graph.compute_costs(&volumes, vdf, &mut costs)?;
 
         log_main!(
             EVENT_CONVERGENCE,

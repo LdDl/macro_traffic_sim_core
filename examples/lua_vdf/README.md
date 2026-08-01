@@ -8,7 +8,7 @@ Same 4-zone diamond network and OD demand as
 is defined as a Lua script instead of a native `BprFunction`.
 
 - Car: native `BprFunction(0.15, 4.0)` - compiled Rust, inlined by `VdfDispatch`
-- Truck: `LuaVdf` running BPR(0.30, 4.0) in LuaJIT - vtable dispatch
+- Truck: `LuaVdf` running BPR(0.30, 4.0) in sandboxed Lua 5.4 - vtable dispatch
 
 The Lua script implements the same formula as the native truck VDF in
 the `diagonalization` example, so results are identical. This serves
@@ -118,13 +118,13 @@ Benchmark on a 100-zone grid (see `benches/lua_vdf.rs`):
 
 | Scenario | Time | vs native |
 |----------|------|-----------|
-| Both classes native | 10.5 ms | baseline |
-| Truck Lua, car native | 29.9 ms | x2.9 |
-| Both classes Lua | 89.2 ms | x8.5 |
+| Both classes native | 10.6 ms | baseline |
+| Truck Lua, car native | 18.9 ms | x1.8 |
+| Both classes Lua | 69.0 ms | x6.5 |
 
-Per-call: ~120 ns (LuaJIT) vs ~2.6 ns (native), ~46x overhead.
-The full-algorithm ratio is smaller because Dijkstra (the dominant
-cost) does not call the VDF.
+Per-call: ~86 ns (Lua 5.4 with the watchdog hook) vs ~2.5 ns
+(native), ~35x overhead. The full-algorithm ratio is smaller because
+Dijkstra (the dominant cost) does not call the VDF.
 
 ## Difference from diagonalization example
 

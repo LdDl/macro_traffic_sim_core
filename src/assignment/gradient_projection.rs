@@ -172,7 +172,7 @@ impl AssignmentMethod for GradientProjection {
         let mut dij_visited = vec![false; graph.num_nodes];
 
         // Initialize with free-flow costs
-        graph.compute_costs(&volumes, vdf, &mut costs);
+        graph.compute_costs(&volumes, vdf, &mut costs)?;
 
         // path_sets keyed by (origin_zone, dest_zone)
         let mut path_sets: HashMap<(ZoneID, ZoneID), Vec<Path>> = HashMap::new();
@@ -239,7 +239,7 @@ impl AssignmentMethod for GradientProjection {
             iteration = iter + 1;
 
             // Update costs from current volumes
-            graph.compute_costs(&volumes, vdf, &mut costs);
+            graph.compute_costs(&volumes, vdf, &mut costs)?;
 
             // Update all path costs
             for paths in path_sets.values_mut() {
@@ -366,7 +366,7 @@ impl AssignmentMethod for GradientProjection {
         }
 
         // Final cost computation
-        graph.compute_costs(&volumes, vdf, &mut costs);
+        graph.compute_costs(&volumes, vdf, &mut costs)?;
 
         log_main!(
             EVENT_CONVERGENCE,

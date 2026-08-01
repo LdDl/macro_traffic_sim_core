@@ -21,6 +21,11 @@ const EPS_BETA: f64 = 1e-12;
 /// Implementations must also provide the integral (needed for the
 /// Beckmann objective in Frank-Wolfe).
 ///
+/// Both methods return `Result` so that fallible implementations
+/// (e.g. Lua-scripted VDFs behind the `lua` feature) can report
+/// runtime errors instead of silently corrupting the assignment.
+/// Native implementations (BPR, Conical, Akcelik) never fail.
+///
 /// # Examples
 ///
 /// ```
@@ -29,18 +34,28 @@ const EPS_BETA: f64 = 1e-12;
 /// let bpr = BprFunction::new(0.15, 4.0);
 ///
 /// // Zero volume -> free-flow time
-/// assert_eq!(bpr.travel_time(5.0, 0.0, 500.0), 5.0);
+/// assert_eq!(bpr.travel_time(5.0, 0.0, 500.0).unwrap(), 5.0);
 ///
 /// // Integral at zero volume is zero
-/// assert_eq!(bpr.integral(5.0, 0.0, 500.0), 0.0);
+/// assert_eq!(bpr.integral(5.0, 0.0, 500.0).unwrap(), 0.0);
 /// ```
 pub trait VolumeDelayFunction {
     /// Compute travel time given free-flow time, volume, and capacity.
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64;
+    fn travel_time(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError>;
 
     /// Compute the integral of the VDF from 0 to volume.
     /// Needed for the Beckmann objective function in Frank-Wolfe.
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64;
+    fn integral(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError>;
 
     /// Downcast support for enum-based dispatch in diagonalization.
     ///
@@ -77,7 +92,7 @@ pub trait VolumeDelayFunction {
 /// let bpr = BprFunction::default();
 ///
 /// // Volume/capacity = 0.5 -> mild delay
-/// let t = bpr.travel_time(10.0, 500.0, 1000.0);
+/// let t = bpr.travel_time(10.0, 500.0, 1000.0).unwrap();
 /// // t = 10 * (1 + 0.15 * 0.5^4) = 10 * 1.009375 = 10.09375
 /// assert!((t - 10.09375).abs() < 1e-10);
 /// ```
@@ -155,23 +170,33 @@ impl BprFunction {
 }
 
 impl VolumeDelayFunction for BprFunction {
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn travel_time(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
-        free_flow_time * (1.0 + self.alpha * self.ratio_pow(volume / capacity))
+        Ok(free_flow_time * (1.0 + self.alpha * self.ratio_pow(volume / capacity)))
     }
 
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn integral(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         if volume <= 0.0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let ratio = volume / capacity;
-        free_flow_time
-            * (volume + self.alpha * capacity * self.ratio_pow_plus1(ratio) / (self.beta + 1.0))
+        Ok(free_flow_time
+            * (volume + self.alpha * capacity * self.ratio_pow_plus1(ratio) / (self.beta + 1.0)))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -204,10 +229,10 @@ impl VolumeDelayFunction for BprFunction {
 /// let cdf = ConicalDelayFunction::default(); // alpha = 2
 ///
 /// // Free-flow: 10 min, no volume
-/// assert!((cdf.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < 1e-10);
+/// assert!((cdf.travel_time(10.0, 0.0, 1000.0).unwrap() - 10.0).abs() < 1e-10);
 ///
 /// // At capacity: always 2 * t0
-/// assert!((cdf.travel_time(10.0, 1000.0, 1000.0) - 20.0).abs() < 1e-10);
+/// assert!((cdf.travel_time(10.0, 1000.0, 1000.0).unwrap() - 20.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ConicalDelayFunction {
@@ -244,22 +269,32 @@ impl Default for ConicalDelayFunction {
 }
 
 impl VolumeDelayFunction for ConicalDelayFunction {
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn travel_time(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         let a = self.alpha;
         let b = self.beta;
         let r = 1.0 - volume / capacity;
-        free_flow_time * (2.0 + (a * a * r * r + b * b).sqrt() - a * r - b)
+        Ok(free_flow_time * (2.0 + (a * a * r * r + b * b).sqrt() - a * r - b))
     }
 
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn integral(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         if volume <= 0.0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let a = self.alpha;
         let b = self.beta;
@@ -270,10 +305,10 @@ impl VolumeDelayFunction for ConicalDelayFunction {
             u * s / 2.0 + b * b / (2.0 * a) * (a * u + s).ln()
         };
 
-        free_flow_time
+        Ok(free_flow_time
             * ((2.0 - a - b) * volume
                 + a * volume * volume / (2.0 * c)
-                + c * (g(1.0) - g(1.0 - volume / c)))
+                + c * (g(1.0) - g(1.0 - volume / c))))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -307,10 +342,10 @@ impl VolumeDelayFunction for ConicalDelayFunction {
 /// let akc = AkcelikDelayFunction::default(); // J=0.1, T=0.25h
 ///
 /// // Free-flow: no volume
-/// assert!((akc.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < 1e-10);
+/// assert!((akc.travel_time(10.0, 0.0, 1000.0).unwrap() - 10.0).abs() < 1e-10);
 ///
 /// // Over capacity: delay increases
-/// assert!(akc.travel_time(10.0, 1500.0, 1000.0) > akc.travel_time(10.0, 1000.0, 1000.0));
+/// assert!(akc.travel_time(10.0, 1500.0, 1000.0).unwrap() > akc.travel_time(10.0, 1000.0, 1000.0).unwrap());
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct AkcelikDelayFunction {
@@ -344,28 +379,38 @@ impl Default for AkcelikDelayFunction {
 }
 
 impl VolumeDelayFunction for AkcelikDelayFunction {
-    fn travel_time(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn travel_time(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         if self.j <= 0.0 {
-            return free_flow_time;
+            return Ok(free_flow_time);
         }
         let z = volume / capacity;
         let d = self.t_period;
         let inner = (z - 1.0).powi(2) + 8.0 * self.j * z / (capacity * d);
-        free_flow_time + d / 4.0 * ((z - 1.0) + inner.sqrt())
+        Ok(free_flow_time + d / 4.0 * ((z - 1.0) + inner.sqrt()))
     }
 
-    fn integral(&self, free_flow_time: f64, volume: f64, capacity: f64) -> f64 {
+    fn integral(
+        &self,
+        free_flow_time: f64,
+        volume: f64,
+        capacity: f64,
+    ) -> Result<f64, AssignmentError> {
         if capacity <= 0.0 {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         if volume <= 0.0 {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.j <= 0.0 {
-            return free_flow_time * volume;
+            return Ok(free_flow_time * volume);
         }
 
         let r = volume / capacity;
@@ -379,7 +424,7 @@ impl VolumeDelayFunction for AkcelikDelayFunction {
             (2.0 * r + p) / 4.0 * s + disc / 8.0 * (2.0 * s + 2.0 * r + p).ln()
         };
 
-        capacity * (free_flow_time * r + d / 4.0 * (r * r / 2.0 - r + h(r) - h(0.0)))
+        Ok(capacity * (free_flow_time * r + d / 4.0 * (r * r / 2.0 - r + h(r) - h(0.0))))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -525,10 +570,10 @@ pub fn compute_link_costs(
     network: &Network,
     volumes: &HashMap<LinkID, f64>,
     vdf: &dyn VolumeDelayFunction,
-) -> HashMap<LinkID, f64> {
+) -> Result<HashMap<LinkID, f64>, AssignmentError> {
     let mut costs = HashMap::with_capacity(network.links.len());
-    compute_link_costs_into(network, volumes, vdf, &mut costs);
-    costs
+    compute_link_costs_into(network, volumes, vdf, &mut costs)?;
+    Ok(costs)
 }
 
 /// Compute link costs into a pre-allocated HashMap, avoiding reallocation.
@@ -540,14 +585,15 @@ pub fn compute_link_costs_into(
     volumes: &HashMap<LinkID, f64>,
     vdf: &dyn VolumeDelayFunction,
     out: &mut HashMap<LinkID, f64>,
-) {
+) -> Result<(), AssignmentError> {
     for (&link_id, link) in &network.links {
         let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
         let ff_time = link.get_free_flow_time_hours();
         let capacity = link.get_total_capacity();
-        let cost = vdf.travel_time(ff_time, volume, capacity);
+        let cost = vdf.travel_time(ff_time, volume, capacity)?;
         *out.entry(link_id).or_insert(0.0) = cost;
     }
+    Ok(())
 }
 
 /// Compute the Beckmann objective function value.
@@ -561,15 +607,15 @@ pub fn beckmann_objective(
     network: &Network,
     volumes: &HashMap<LinkID, f64>,
     vdf: &dyn VolumeDelayFunction,
-) -> f64 {
+) -> Result<f64, AssignmentError> {
     let mut objective = 0.0;
     for (&link_id, link) in &network.links {
         let volume = volumes.get(&link_id).copied().unwrap_or(0.0);
         let ff_time = link.get_free_flow_time_hours();
         let capacity = link.get_total_capacity();
-        objective += vdf.integral(ff_time, volume, capacity);
+        objective += vdf.integral(ff_time, volume, capacity)?;
     }
-    objective
+    Ok(objective)
 }
 
 /// Compute the relative gap for convergence checking.
@@ -637,14 +683,14 @@ mod tests {
     #[test]
     fn bpr_zero_volume_returns_free_flow() {
         let bpr = BprFunction::default();
-        assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0), 10.0);
+        assert_eq!(bpr.travel_time(10.0, 0.0, 1000.0).unwrap(), 10.0);
     }
 
     #[test]
     fn bpr_at_capacity() {
         let bpr = BprFunction::default();
         // t = 10 * (1 + 0.15 * 1^4) = 11.5
-        let t = bpr.travel_time(10.0, 1000.0, 1000.0);
+        let t = bpr.travel_time(10.0, 1000.0, 1000.0).unwrap();
         assert!((t - 11.5).abs() < EPS);
     }
 
@@ -652,7 +698,7 @@ mod tests {
     fn bpr_half_capacity() {
         let bpr = BprFunction::default();
         // t = 10 * (1 + 0.15 * 0.5^4) = 10 * 1.009375 = 10.09375
-        let t = bpr.travel_time(10.0, 500.0, 1000.0);
+        let t = bpr.travel_time(10.0, 500.0, 1000.0).unwrap();
         assert!((t - 10.09375).abs() < EPS);
     }
 
@@ -660,34 +706,34 @@ mod tests {
     fn bpr_double_capacity() {
         let bpr = BprFunction::default();
         // t = 10 * (1 + 0.15 * 2^4) = 10 * (1 + 0.15 * 16) = 10 * 3.4 = 34.0
-        let t = bpr.travel_time(10.0, 2000.0, 1000.0);
+        let t = bpr.travel_time(10.0, 2000.0, 1000.0).unwrap();
         assert!((t - 34.0).abs() < EPS);
     }
 
     #[test]
     fn bpr_zero_capacity_returns_infinity() {
         let bpr = BprFunction::default();
-        assert_eq!(bpr.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(bpr.travel_time(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn bpr_negative_capacity_returns_infinity() {
         let bpr = BprFunction::default();
-        assert_eq!(bpr.travel_time(10.0, 100.0, -500.0), f64::INFINITY);
+        assert_eq!(bpr.travel_time(10.0, 100.0, -500.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn bpr_custom_params() {
         let bpr = BprFunction::new(0.5, 2.0);
         // t = 10 * (1 + 0.5 * (500/1000)^2) = 10 * (1 + 0.5 * 0.25) = 10 * 1.125 = 11.25
-        let t = bpr.travel_time(10.0, 500.0, 1000.0);
+        let t = bpr.travel_time(10.0, 500.0, 1000.0).unwrap();
         assert!((t - 11.25).abs() < EPS);
     }
 
     #[test]
     fn bpr_integral_zero_volume() {
         let bpr = BprFunction::default();
-        assert_eq!(bpr.integral(10.0, 0.0, 1000.0), 0.0);
+        assert_eq!(bpr.integral(10.0, 0.0, 1000.0).unwrap(), 0.0);
     }
 
     #[test]
@@ -695,22 +741,22 @@ mod tests {
         let bpr = BprFunction::default();
         // integral = t0 * (x + alpha * c * (x/c)^(beta+1) / (beta+1))
         // = 10 * (1000 + 0.15 * 1000 * 1^5 / 5) = 10 * (1000 + 30) = 10300
-        let integral = bpr.integral(10.0, 1000.0, 1000.0);
+        let integral = bpr.integral(10.0, 1000.0, 1000.0).unwrap();
         assert!((integral - 10300.0).abs() < 1e-6);
     }
 
     #[test]
     fn bpr_integral_zero_capacity_returns_infinity() {
         let bpr = BprFunction::default();
-        assert_eq!(bpr.integral(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(bpr.integral(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn bpr_integral_monotonic() {
         let bpr = BprFunction::default();
-        let i1 = bpr.integral(10.0, 500.0, 1000.0);
-        let i2 = bpr.integral(10.0, 1000.0, 1000.0);
-        let i3 = bpr.integral(10.0, 1500.0, 1000.0);
+        let i1 = bpr.integral(10.0, 500.0, 1000.0).unwrap();
+        let i2 = bpr.integral(10.0, 1000.0, 1000.0).unwrap();
+        let i3 = bpr.integral(10.0, 1500.0, 1000.0).unwrap();
         assert!(i1 < i2);
         assert!(i2 < i3);
     }
@@ -747,7 +793,7 @@ mod tests {
     #[test]
     fn conical_zero_volume_returns_free_flow() {
         let c = ConicalDelayFunction::default();
-        assert!((c.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < EPS);
+        assert!((c.travel_time(10.0, 0.0, 1000.0).unwrap() - 10.0).abs() < EPS);
     }
 
     #[test]
@@ -755,7 +801,7 @@ mod tests {
         for &alpha in &[2.0, 3.0, 5.0, 10.0] {
             let c = ConicalDelayFunction::new(alpha);
             assert!(
-                (c.travel_time(10.0, 1000.0, 1000.0) - 20.0).abs() < EPS,
+                (c.travel_time(10.0, 1000.0, 1000.0).unwrap() - 20.0).abs() < EPS,
                 "Failed for alpha={}",
                 alpha
             );
@@ -765,33 +811,33 @@ mod tests {
     #[test]
     fn conical_over_capacity() {
         let c = ConicalDelayFunction::default();
-        assert!(c.travel_time(10.0, 2000.0, 1000.0) > 20.0);
+        assert!(c.travel_time(10.0, 2000.0, 1000.0).unwrap() > 20.0);
     }
 
     #[test]
     fn conical_zero_capacity_returns_infinity() {
         let c = ConicalDelayFunction::default();
-        assert_eq!(c.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(c.travel_time(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn conical_integral_zero_volume() {
         let c = ConicalDelayFunction::default();
-        assert_eq!(c.integral(10.0, 0.0, 1000.0), 0.0);
+        assert_eq!(c.integral(10.0, 0.0, 1000.0).unwrap(), 0.0);
     }
 
     #[test]
     fn conical_integral_zero_capacity_returns_infinity() {
         let c = ConicalDelayFunction::default();
-        assert_eq!(c.integral(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(c.integral(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn conical_integral_monotonic() {
         let c = ConicalDelayFunction::default();
-        let i1 = c.integral(10.0, 500.0, 1000.0);
-        let i2 = c.integral(10.0, 1000.0, 1000.0);
-        let i3 = c.integral(10.0, 1500.0, 1000.0);
+        let i1 = c.integral(10.0, 500.0, 1000.0).unwrap();
+        let i2 = c.integral(10.0, 1000.0, 1000.0).unwrap();
+        let i3 = c.integral(10.0, 1500.0, 1000.0).unwrap();
         assert!(i1 < i2);
         assert!(i2 < i3);
     }
@@ -801,8 +847,10 @@ mod tests {
         let c = ConicalDelayFunction::default();
         let h = 0.001;
         for &vol in &[100.0, 500.0, 1000.0, 1500.0] {
-            let numerical = (c.integral(10.0, vol + h, 1000.0) - c.integral(10.0, vol, 1000.0)) / h;
-            let analytical = c.travel_time(10.0, vol, 1000.0);
+            let numerical = (c.integral(10.0, vol + h, 1000.0).unwrap()
+                - c.integral(10.0, vol, 1000.0).unwrap())
+                / h;
+            let analytical = c.travel_time(10.0, vol, 1000.0).unwrap();
             assert!(
                 (numerical - analytical).abs() < 1e-4,
                 "vol={}: numerical={}, analytical={}",
@@ -816,22 +864,22 @@ mod tests {
     #[test]
     fn akcelik_zero_volume_returns_free_flow() {
         let a = AkcelikDelayFunction::default();
-        assert!((a.travel_time(10.0, 0.0, 1000.0) - 10.0).abs() < EPS);
+        assert!((a.travel_time(10.0, 0.0, 1000.0).unwrap() - 10.0).abs() < EPS);
     }
 
     #[test]
     fn akcelik_at_capacity_adds_delay() {
         let a = AkcelikDelayFunction::default();
-        let t = a.travel_time(10.0, 1000.0, 1000.0);
+        let t = a.travel_time(10.0, 1000.0, 1000.0).unwrap();
         assert!(t > 10.0);
     }
 
     #[test]
     fn akcelik_over_capacity_grows() {
         let a = AkcelikDelayFunction::default();
-        let t1 = a.travel_time(10.0, 1000.0, 1000.0);
-        let t2 = a.travel_time(10.0, 1500.0, 1000.0);
-        let t3 = a.travel_time(10.0, 2000.0, 1000.0);
+        let t1 = a.travel_time(10.0, 1000.0, 1000.0).unwrap();
+        let t2 = a.travel_time(10.0, 1500.0, 1000.0).unwrap();
+        let t3 = a.travel_time(10.0, 2000.0, 1000.0).unwrap();
         assert!(t1 < t2);
         assert!(t2 < t3);
     }
@@ -839,34 +887,34 @@ mod tests {
     #[test]
     fn akcelik_zero_capacity_returns_infinity() {
         let a = AkcelikDelayFunction::default();
-        assert_eq!(a.travel_time(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(a.travel_time(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn akcelik_zero_j_returns_free_flow() {
         let a = AkcelikDelayFunction::new(0.0, 0.25);
-        assert_eq!(a.travel_time(10.0, 500.0, 1000.0), 10.0);
-        assert_eq!(a.travel_time(10.0, 2000.0, 1000.0), 10.0);
+        assert_eq!(a.travel_time(10.0, 500.0, 1000.0).unwrap(), 10.0);
+        assert_eq!(a.travel_time(10.0, 2000.0, 1000.0).unwrap(), 10.0);
     }
 
     #[test]
     fn akcelik_integral_zero_volume() {
         let a = AkcelikDelayFunction::default();
-        assert_eq!(a.integral(10.0, 0.0, 1000.0), 0.0);
+        assert_eq!(a.integral(10.0, 0.0, 1000.0).unwrap(), 0.0);
     }
 
     #[test]
     fn akcelik_integral_zero_capacity_returns_infinity() {
         let a = AkcelikDelayFunction::default();
-        assert_eq!(a.integral(10.0, 100.0, 0.0), f64::INFINITY);
+        assert_eq!(a.integral(10.0, 100.0, 0.0).unwrap(), f64::INFINITY);
     }
 
     #[test]
     fn akcelik_integral_monotonic() {
         let a = AkcelikDelayFunction::default();
-        let i1 = a.integral(10.0, 500.0, 1000.0);
-        let i2 = a.integral(10.0, 1000.0, 1000.0);
-        let i3 = a.integral(10.0, 1500.0, 1000.0);
+        let i1 = a.integral(10.0, 500.0, 1000.0).unwrap();
+        let i2 = a.integral(10.0, 1000.0, 1000.0).unwrap();
+        let i3 = a.integral(10.0, 1500.0, 1000.0).unwrap();
         assert!(i1 < i2);
         assert!(i2 < i3);
     }
@@ -876,8 +924,10 @@ mod tests {
         let a = AkcelikDelayFunction::default();
         let h = 0.001;
         for &vol in &[100.0, 500.0, 1000.0, 1500.0] {
-            let numerical = (a.integral(10.0, vol + h, 1000.0) - a.integral(10.0, vol, 1000.0)) / h;
-            let analytical = a.travel_time(10.0, vol, 1000.0);
+            let numerical = (a.integral(10.0, vol + h, 1000.0).unwrap()
+                - a.integral(10.0, vol, 1000.0).unwrap())
+                / h;
+            let analytical = a.travel_time(10.0, vol, 1000.0).unwrap();
             assert!(
                 (numerical - analytical).abs() < 1e-4,
                 "vol={}: numerical={}, analytical={}",
@@ -891,7 +941,7 @@ mod tests {
     #[test]
     fn akcelik_integral_zero_j() {
         let a = AkcelikDelayFunction::new(0.0, 0.25);
-        let i = a.integral(10.0, 500.0, 1000.0);
+        let i = a.integral(10.0, 500.0, 1000.0).unwrap();
         assert!((i - 10.0 * 500.0).abs() < EPS);
     }
 }
