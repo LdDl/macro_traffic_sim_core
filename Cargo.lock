@@ -250,9 +250,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hyperpaths-rs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09371dbd744f181de84db4b3abdc8c859666333dd0c03ca22849e7e0f222fc19"
+checksum = "579a91ae16400415d1e58f2efceb576e21802b461948cddb4ff59dcc8ffe772c"
 
 [[package]]
 name = "is-terminal"

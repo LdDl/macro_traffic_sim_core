@@ -18,7 +18,7 @@ lua = ["mlua"]
 
 [dependencies]
 gtfs-rs = { version = "0.1.0" }
-hyperpaths-rs = { version = "0.1.0" }
+hyperpaths-rs = { version = "0.1.1" }
 ordered-float = "4"
 rayon = { version = "1", optional = true }
 mlua = { version = "0.12", features = ["luajit", "vendored"], optional = true }
@@ -65,6 +65,10 @@ path = "examples/transit_gtfs/main.rs"
 [[example]]
 name = "gtfs_patterns"
 path = "examples/gtfs_patterns/main.rs"
+
+[[example]]
+name = "multimodal"
+path = "examples/multimodal/main.rs"
 
 [dev-dependencies]
 csv = "1"
