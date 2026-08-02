@@ -53,7 +53,7 @@ fn main() {
     );
 
     match run_four_step_model(
-        &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+        &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
     ) {
         Ok(result) => {
             println!("pipeline succeeded (unexpected)");

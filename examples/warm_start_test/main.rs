@@ -111,7 +111,7 @@ fn main() {
 
         let start = Instant::now();
         let result = run_four_step_model(
-            &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+            &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
         )
         .unwrap();
         let elapsed = start.elapsed();

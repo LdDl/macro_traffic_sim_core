@@ -164,6 +164,7 @@ fn bench_store_paths_single_class(c: &mut Criterion) {
                 &logit,
                 &config_no_paths,
                 None,
+                None,
             )
             .unwrap()
         });
@@ -179,6 +180,7 @@ fn bench_store_paths_single_class(c: &mut Criterion) {
                 &logit,
                 &config_with_paths,
                 None,
+                None,
             )
             .unwrap()
         });
@@ -191,6 +193,7 @@ fn bench_store_paths_single_class(c: &mut Criterion) {
         &impedance,
         &logit,
         &config_with_paths,
+        None,
         None,
     )
     .unwrap();
@@ -250,6 +253,7 @@ fn bench_store_paths_multi_class(c: &mut Criterion) {
                 &logit,
                 &config_no_paths,
                 None,
+                None,
             )
             .unwrap()
         });
@@ -265,6 +269,7 @@ fn bench_store_paths_multi_class(c: &mut Criterion) {
                 &logit,
                 &config_with_paths,
                 None,
+                None,
             )
             .unwrap()
         });
@@ -277,6 +282,7 @@ fn bench_store_paths_multi_class(c: &mut Criterion) {
         &impedance,
         &logit,
         &config_with_paths,
+        None,
         None,
     )
     .unwrap();

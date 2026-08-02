@@ -23,6 +23,10 @@ use crate::gmns::types::{AgentType, LinkID, ZoneID};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
+use crate::transit::{
+    TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork, assign_transit_with_options,
+    transit_skim_with_options,
+};
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
 use crate::trip_generation::TripGenerator;
@@ -52,6 +56,24 @@ pub struct PipelineTimings {
     pub total: Duration,
 }
 
+/// Optional public transit layer for the pipeline.
+///
+/// When supplied to [`run_four_step_model`], mode choice gains a TRANSIT
+/// alternative (the caller's `logit_model` must include a
+/// [`AgentType::Transit`](crate::gmns::types::AgentType) utility), and the
+/// resulting transit demand is assigned with the optimal strategies
+/// algorithm.
+///
+/// The transit `network` must use the same zone IDs as the road zones for
+/// its access points (zone centroid = zone ID), so a single OD matrix
+/// splits cleanly across road and transit modes.
+pub struct TransitInput<'a> {
+    /// Transit routes and (zone-access) walk links.
+    pub network: &'a TransitNetwork,
+    /// Assignment options (waiting factor, penalties, dwell).
+    pub options: TransitAssignmentOptions,
+}
+
 /// Result of the complete 4-step model pipeline.
 ///
 /// Contains all intermediate and final results so callers can
@@ -76,6 +98,10 @@ pub struct PipelineResult {
     pub per_feedback_assignments: Vec<AssignmentResult>,
     /// Number of feedback iterations actually performed.
     pub feedback_iterations_done: usize,
+    /// Public transit assignment result, `None` when no transit layer was
+    /// supplied. Contains the optimal-strategies volumes, OD costs and
+    /// boardings for the final transit demand from mode choice.
+    pub transit: Option<TransitAssignmentResult>,
     /// Per-step timing breakdown.
     pub timings: PipelineTimings,
 }
@@ -95,12 +121,18 @@ pub struct PipelineResult {
 /// * `impedance` - Impedance function for the gravity model
 ///   (exponential, power, or combined).
 /// * `logit_model` - Multinomial logit mode choice model with
-///   utility functions per mode.
+///   utility functions per mode. Include an
+///   [`AgentType::Transit`](crate::gmns::types::AgentType) utility to
+///   enable the transit alternative (requires `transit` to be `Some`).
 /// * `config` - Model configuration (assignment method, BPR
 ///   parameters, convergence thresholds, feedback iterations).
+/// * `transit` - Optional public transit layer. When `Some`, mode choice
+///   gains a transit alternative fed by a transit skim, and the resulting
+///   transit demand is assigned with the optimal strategies algorithm.
 ///
 /// # Returns
-/// A [`PipelineResult`] with all intermediate and final results.
+/// A [`PipelineResult`] with all intermediate and final results (including
+/// `transit` when a transit layer was supplied).
 ///
 /// # Errors
 /// Returns [`SimError`] if any step fails (e.g., no zones,
@@ -112,6 +144,7 @@ pub fn run_four_step_model(
     impedance: &dyn ImpedanceFunction,
     logit_model: &MultinomialLogit,
     config: &ModelConfig,
+    transit: Option<TransitInput>,
     on_progress: Option<&dyn Fn(ProgressEvent)>,
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
@@ -191,6 +224,15 @@ pub fn run_four_step_model(
     // Wrapped in Rc to share across all 3 mode skims without cloning.
     let distance_skim_rc = Rc::new(distance_skim(network, &zone_ids));
 
+    // Transit skim is invariant across feedback iterations too: the
+    // Spiess-Florian costs are flow-independent, so it does not react to
+    // road congestion (that coupling is a separate future step). Compute it
+    // once here and reuse it in every mode choice pass.
+    let transit_skim_map = match &transit {
+        Some(t) => Some(transit_skim_with_options(t.network, &zone_ids, &t.options)?),
+        None => None,
+    };
+
     let mut total_od;
     let mut mode_od;
     let mut assignment_result;
@@ -268,6 +310,20 @@ pub fn run_four_step_model(
                 cost: Rc::clone(&zero_cost),
             },
         );
+
+        // Transit alternative: the flow-independent skim built once above.
+        // Missing pairs are unavailable (infinite time -> zero share).
+        if let Some(map) = &transit_skim_map {
+            mode_skims.insert(
+                AgentType::Transit,
+                ModeSkim::from_time_map(
+                    &zone_ids,
+                    map,
+                    Rc::clone(&distance_skim_rc),
+                    Rc::clone(&zero_cost),
+                ),
+            );
+        }
 
         mode_od = logit_model.split(&total_od, &mode_skims)?;
         t_mode_choice += step_start.elapsed();
@@ -385,6 +441,20 @@ pub fn run_four_step_model(
 
         // If this is the last iteration, return results
         if fb_iter + 1 == max_feedback {
+            // Assign the final transit demand with optimal strategies. Done
+            // once here (not per feedback iteration) since only the last
+            // split matters; skipped when the split produced no transit
+            // demand (no transit input, or a logit without a transit mode).
+            let transit_result = match (&transit, mode_od.get(&AgentType::Transit)) {
+                (Some(t), Some(transit_od)) if transit_od.total() > 0.0 => {
+                    let step_start = Instant::now();
+                    let result = assign_transit_with_options(t.network, transit_od, &t.options)?;
+                    t_assignment += step_start.elapsed();
+                    Some(result)
+                }
+                _ => None,
+            };
+
             log_main!(
                 EVENT_PIPELINE,
                 "Pipeline complete",
@@ -400,6 +470,7 @@ pub fn run_four_step_model(
                 assignment: assignment_result,
                 per_feedback_assignments,
                 feedback_iterations_done: feedback_done,
+                transit: transit_result,
                 timings: PipelineTimings {
                     generation: t_generation,
                     distribution: t_distribution,
@@ -670,6 +741,11 @@ fn speed_based_time_skim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gmns::meso::link::Link;
+    use crate::gmns::meso::node::Node;
+    use crate::transit::TransitRoute;
+    use crate::trip_distribution::ExponentialImpedance;
+    use crate::trip_generation::RegressionGenerator;
 
     const EPS: f64 = 1e-10;
 
@@ -692,5 +768,109 @@ mod tests {
         // North pole to south pole ~20015 km (half circumference)
         let dist = haversine_km(90.0, 0.0, -90.0, 0.0);
         assert!((dist - 20015.0).abs() < 100.0, "got {:.1} km", dist);
+    }
+
+    // A minimal 2-zone network. pop/emp are balanced so Furness converges:
+    // with P = 0.5 pop + 0.1 emp and A = 0.1 pop + 0.8 emp, pop = 4 * emp
+    // gives sum(P) = sum(A).
+    fn two_zone_setup() -> (Network, Vec<Zone>) {
+        let mut net = Network::new();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(55.75, 37.62)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(55.76, 37.62)
+                .build(),
+        )
+        .unwrap();
+        for (id, a, b) in [(100, 1, 2), (101, 2, 1)] {
+            net.add_link(
+                Link::new(id, a, b)
+                    .with_length_meters(1000.0)
+                    .with_free_speed(60.0)
+                    .with_capacity(1800.0)
+                    .with_lanes_num(2)
+                    .build(),
+            )
+            .unwrap();
+        }
+        let zones = vec![
+            Zone::new(1)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+            Zone::new(2)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+        ];
+        (net, zones)
+    }
+
+    fn base_config() -> ModelConfig {
+        ModelConfig::new()
+            .with_max_iterations(20)
+            .with_feedback_iterations(1)
+            .build()
+    }
+
+    #[test]
+    fn pipeline_without_transit_has_no_transit_result() {
+        let (net, zones) = two_zone_setup();
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk(),
+            &base_config(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(result.transit.is_none());
+        assert!(!result.mode_od.contains_key(&AgentType::Transit));
+    }
+
+    #[test]
+    fn pipeline_with_transit_assigns_transit_demand() {
+        let (net, zones) = two_zone_setup();
+        // Transit centroids = zone IDs: a line directly over stops 1 and 2.
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+            }),
+            None,
+        )
+        .unwrap();
+
+        // Mode choice produced a transit share, and it was assigned.
+        let transit_od_total = result.mode_od[&AgentType::Transit].total();
+        assert!(
+            transit_od_total > 0.0,
+            "transit demand = {}",
+            transit_od_total
+        );
+        let transit = result.transit.expect("transit result present");
+        // The line carries the 1 -> 2 transit demand (2 -> 1 is unavailable,
+        // so all transit demand is on 1 -> 2).
+        assert!(transit.total_boardings > 0.0);
+        assert!((transit.od_costs[&(1, 2)] - 16.0).abs() < 1e-9);
     }
 }

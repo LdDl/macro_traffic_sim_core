@@ -13,6 +13,7 @@
 //! - [`SimError::ModeChoice`] -- step 3 errors
 //! - [`SimError::Assignment`] -- step 4 errors
 //! - [`SimError::Pipeline`] -- orchestration errors
+//! - [`SimError::Transit`] -- public transit assignment errors
 //!
 //! ## Examples
 //!
