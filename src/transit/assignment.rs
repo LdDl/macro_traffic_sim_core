@@ -102,7 +102,7 @@ fn route_node_name(route_id: &str, seq: usize) -> String {
     format!("{}#{}", route_id, seq)
 }
 
-fn expand_route_graph(network: &TransitNetwork) -> RouteGraph {
+fn expand_route_graph(network: &TransitNetwork, wait_factor: f64) -> RouteGraph {
     let mut graph = RouteGraph {
         links: Vec::new(),
         meta: Vec::new(),
@@ -129,11 +129,25 @@ fn expand_route_graph(network: &TransitNetwork) -> RouteGraph {
             let node = route_node_name(&route.id, seq);
             graph.nodes.insert(node.clone());
 
-            // Boarding at every stop except the last one
+            // Boarding at every stop except the last one. The waiting
+            // time factor scales the effective headway: expected wait =
+            // wait_factor * headway. Since the solver derives freq =
+            // 1/headway and expected wait = 1/freq (alpha = 1 in the
+            // Spiess-Florian label), feeding an effective headway of
+            // wait_factor * headway is exactly the paper's WLOG (without loss of generality)
+            // frequency scaling (p. 91): all boarding links at a stop are scaled by
+            // the same factor, so the line-choice proportions f_a/f_i are
+            // unchanged and only the waiting term moves.
             if seq < last {
                 push(
                     &mut graph,
-                    Link::new(&stop_name(stop), &node, &route.id, 0.0, route.headway),
+                    Link::new(
+                        &stop_name(stop),
+                        &node,
+                        &route.id,
+                        0.0,
+                        wait_factor * route.headway,
+                    ),
                     LinkMeta {
                         kind: TransitLinkKind::Boarding,
                         route_id: Some(route.id.clone()),
@@ -196,8 +210,33 @@ fn expand_route_graph(network: &TransitNetwork) -> RouteGraph {
     graph
 }
 
+/// Options controlling the transit assignment.
+#[derive(Debug, Clone, Copy)]
+pub struct TransitAssignmentOptions {
+    /// Waiting time factor (the `alpha` of Spiess & Florian, p. 91):
+    /// expected wait at a stop = `wait_factor * headway` for a single
+    /// line, `wait_factor / combined_frequency` for a set of attractive
+    /// lines.
+    ///
+    /// - `1.0` (default): exponentially distributed vehicle arrivals with
+    ///   a uniform passenger arrival rate; the value used in the paper's
+    ///   own worked example.
+    /// - `0.5`: constant vehicle interarrival times, i.e. the passenger
+    ///   waits on average half the headway - a common practical choice.
+    ///
+    /// Must be strictly positive.
+    pub wait_factor: f64,
+}
+
+impl Default for TransitAssignmentOptions {
+    fn default() -> Self {
+        Self { wait_factor: 1.0 }
+    }
+}
+
 /// Runs frequency-based transit assignment with optimal strategies
-/// (Spiess & Florian, 1989).
+/// (Spiess & Florian, 1989), using default options
+/// ([`TransitAssignmentOptions::default`], `wait_factor = 1.0`).
 ///
 /// The OD matrix is interpreted as transit trips between stops: every zone
 /// ID with demand must be a stop of some route or walk link. For each
@@ -238,8 +277,61 @@ pub fn assign_transit(
     network: &TransitNetwork,
     od: &dyn OdMatrix,
 ) -> Result<TransitAssignmentResult, TransitError> {
+    assign_transit_with_options(network, od, &TransitAssignmentOptions::default())
+}
+
+/// Runs frequency-based transit assignment with explicit options.
+///
+/// Identical to [`assign_transit`] but lets the caller set the waiting
+/// time factor (see [`TransitAssignmentOptions`]).
+///
+/// # Arguments
+///
+/// * `network` - Transit routes and walk links
+/// * `od` - Transit OD matrix; zone IDs must be stop node IDs
+/// * `options` - Assignment options (waiting time factor)
+///
+/// # Errors
+///
+/// Returns a [`TransitError`] when the network is structurally invalid,
+/// when `options.wait_factor` is not strictly positive, when a demand zone
+/// is not a stop, or when an OD pair with positive demand has no transit
+/// path.
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
+/// use macro_traffic_sim_core::transit::{
+///     assign_transit_with_options, TransitAssignmentOptions, TransitNetwork, TransitRoute,
+/// };
+///
+/// // Single line between two stops, 10 minute ride, 5 minute headway
+/// let mut network = TransitNetwork::new();
+/// network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
+///
+/// let mut od = DenseOdMatrix::new(vec![1, 2]);
+/// od.set(1, 2, 100.0);
+///
+/// // wait_factor 0.5 halves the waiting time: 2.5 min wait + 10 min ride
+/// let options = TransitAssignmentOptions { wait_factor: 0.5 };
+/// let result = assign_transit_with_options(&network, &od, &options).unwrap();
+/// assert!((result.od_costs[&(1, 2)] - 12.5).abs() < 1e-6);
+/// ```
+pub fn assign_transit_with_options(
+    network: &TransitNetwork,
+    od: &dyn OdMatrix,
+    options: &TransitAssignmentOptions,
+) -> Result<TransitAssignmentResult, TransitError> {
     network.validate()?;
-    let graph = expand_route_graph(network);
+    // Reject non-positive and NaN factors (NaN fails every comparison,
+    // so test for a valid value rather than an invalid one).
+    if options.wait_factor.is_nan() || options.wait_factor <= 0.0 {
+        return Err(TransitError::InvalidWaitFactor {
+            wait_factor: options.wait_factor,
+        });
+    }
+    let graph = expand_route_graph(network, options.wait_factor);
 
     let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
     let mut od_costs: HashMap<(i64, i64), f64> = HashMap::new();
@@ -339,6 +431,9 @@ mod tests {
     use crate::od::DenseOdMatrix;
     use crate::transit::route::TransitRoute;
 
+    /// Tolerance for exact-value comparisons in the assignment tests.
+    const EPS: f64 = 1e-9;
+
     /// The example network from Spiess & Florian (1989), pages 96-97.
     /// Stops: A=1, X=2, Y=3, B=4.
     fn paper_network() -> TransitNetwork {
@@ -371,8 +466,6 @@ mod tests {
         od.set(1, 4, 1.0);
 
         let result = assign_transit(&network, &od).unwrap();
-
-        const EPS: f64 = 1e-9;
 
         // Expected strategy cost from the paper: u_A = 27.75 minutes
         assert!(
@@ -409,7 +502,7 @@ mod tests {
         assert!(result.od_costs[&(1, 4)] > 0.0);
         assert!(result.od_costs[&(2, 4)] > 0.0);
         // Expected time from X in the paper: u_X = 19.0714... minutes
-        assert!((result.od_costs[&(2, 4)] - 19.071428571428573).abs() <= 1e-9);
+        assert!((result.od_costs[&(2, 4)] - 19.071428571428573).abs() <= EPS);
     }
 
     #[test]
@@ -425,13 +518,86 @@ mod tests {
         let result = assign_transit(&network, &od).unwrap();
 
         // 5 wait + 10 ride + 4 walk
-        assert!((result.od_costs[&(1, 3)] - 19.0).abs() < 1e-6);
+        assert!((result.od_costs[&(1, 3)] - 19.0).abs() < EPS);
         let walk = result
             .link_volumes
             .iter()
             .find(|lv| lv.kind == TransitLinkKind::Walking)
             .unwrap();
-        assert!((walk.volume - 100.0).abs() < 1e-6);
+        assert!((walk.volume - 100.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_wait_factor_scales_only_waiting() {
+        // Single line: 10 min ride, 6 min headway. Default wait_factor 1.0
+        // gives wait = headway = 6, so cost = 16. wait_factor 0.5 halves
+        // only the waiting term: wait = 3, ride unchanged, cost = 13.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 100.0);
+
+        let default = assign_transit(&network, &od).unwrap();
+        assert!((default.od_costs[&(1, 2)] - 16.0).abs() < EPS);
+
+        let half = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions { wait_factor: 0.5 },
+        )
+        .unwrap();
+        assert!((half.od_costs[&(1, 2)] - 13.0).abs() < EPS);
+        // The line still carries the whole demand: waiting scaling does
+        // not change the loading of a single-line strategy.
+        assert!((half.route_boardings["L1"] - 100.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_wait_factor_preserves_line_split() {
+        // Two competing lines at stop 1 to destination 2: same segment
+        // time, headways 6 and 12 (frequencies 1/6 and 1/12). The split
+        // is f_a/f_i = 2/3 vs 1/3 regardless of the waiting factor, since
+        // both boarding links are scaled by the same factor.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("Fast", vec![1, 2], vec![10.0], 6.0));
+        network.add_route(TransitRoute::new("Slow", vec![1, 2], vec![10.0], 12.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 90.0);
+
+        for wait_factor in [1.0, 0.5, 2.0] {
+            let result = assign_transit_with_options(
+                &network,
+                &od,
+                &TransitAssignmentOptions { wait_factor },
+            )
+            .unwrap();
+            assert!(
+                (result.route_boardings["Fast"] - 60.0).abs() < EPS,
+                "wait_factor {}: Fast = {}",
+                wait_factor,
+                result.route_boardings["Fast"]
+            );
+            assert!((result.route_boardings["Slow"] - 30.0).abs() < EPS);
+        }
+    }
+
+    #[test]
+    fn test_invalid_wait_factor() {
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 1.0);
+
+        for bad in [0.0, -1.0, f64::NAN] {
+            assert!(matches!(
+                assign_transit_with_options(
+                    &network,
+                    &od,
+                    &TransitAssignmentOptions { wait_factor: bad }
+                ),
+                Err(TransitError::InvalidWaitFactor { .. })
+            ));
+        }
     }
 
     #[test]

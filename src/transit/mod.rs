@@ -74,7 +74,8 @@ pub mod from_gtfs;
 pub mod route;
 
 pub use self::assignment::{
-    TransitAssignmentResult, TransitLinkKind, TransitLinkVolume, assign_transit,
+    TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
+    assign_transit, assign_transit_with_options,
 };
 pub use self::error::TransitError;
 pub use self::from_gtfs::transit_network_from_gtfs;

@@ -374,12 +374,29 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     DOI: 10.1016/0191-2615(89)90034-9
     Frequency-based transit assignment (the `transit` module).
 
-13. GTFS (General Transit Feed Specification), static reference.
+13. Dial, R.B. (1967) "Transit pathfinder algorithm",
+    Highway Research Record, 205, 67-85.
+
+14. Le Clercq, F. (1972) "A public transport assignment method",
+    Traffic Engineering and Control, 91-96.
+
+15. Chapleau, R. (1974) "Reseaux de transport en commun: Structure
+    informatique et affectation", PhD thesis, Departement d'informatique et
+    de recherche operationnelle, Universite de Montreal, Quebec.
+
+16. Rapp, M.H., Mattenberger, P., Piguet, S. and Robert-Grandpierre, A.
+    (1976) "Interactive graphic system for transit route optimization",
+    Transportation Research Record, 619.
+
+17. UMTA/FHWA (1977) "UTPS Reference Manual",
+    U.S. Department of Transportation.
+
+18. GTFS (General Transit Feed Specification), static reference.
     https://gtfs.org/documentation/schedule/reference/
     Source format for transit routes/frequencies (the `gtfs-rs` crate and
     the `transit::from_gtfs` converter).
 
-14. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+19. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
 
 ## License
 

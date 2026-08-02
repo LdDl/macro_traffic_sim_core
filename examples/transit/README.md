@@ -105,6 +105,33 @@ Expected travel time A -> B: **27.75 min** (matches the paper).
 
 Half the passengers take Line 1 directly; the other half rides Line 2 to Y and there splits between Line 4 and Line 3 proportionally to their frequencies (1/3 vs 1/15).
 
+## Waiting time factor
+
+The expected wait at a stop is `wait_factor / combined_frequency`. The
+paper (p. 91) calls this the `alpha` parameter:
+
+- `alpha = 1` (the default, used above and in the paper's worked example):
+  exponentially distributed vehicle arrivals with a uniform passenger
+  arrival rate, expected wait = full headway;
+- `alpha = 0.5`: an approximation of constant vehicle interarrival times,
+  the passenger waits on average half the headway. The paper notes this is
+  "the most widely used approach in practice", despite being a rough
+  approximation.
+
+`assign_transit_with_options(&network, &od, &TransitAssignmentOptions { wait_factor: 0.5 })`
+runs the same assignment with half-headway waiting. On this network the
+A -> B expected travel time drops from 27.75 to **25.25 min**. Note this
+is not a simple constant subtraction: cheaper waiting can change the
+optimal strategy itself. Here it opens a transfer at X - with waiting
+halved it becomes worthwhile for the Line 2 riders to alight at X and
+board Line 3, which was not attractive at `alpha = 1`.
+
+The factor scales only the waiting term, applied uniformly to every
+boarding link, so the line-choice proportions among the lines that stay
+attractive are unchanged (this is the paper's frequency-scaling remark,
+p. 91). Implemented core-side: the solver is untouched, boarding links
+are simply built with an effective headway of `wait_factor * headway`.
+
 ## Reference
 
 Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment model for transit networks". Transportation Research Part B 23(2), 83-102. DOI: [10.1016/0191-2615(89)90034-9](https://doi.org/10.1016/0191-2615(89)90034-9)

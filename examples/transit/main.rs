@@ -31,7 +31,8 @@
 
 use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
 use macro_traffic_sim_core::transit::{
-    TransitLinkKind, TransitNetwork, TransitRoute, assign_transit,
+    TransitAssignmentOptions, TransitLinkKind, TransitNetwork, TransitRoute, assign_transit,
+    assign_transit_with_options,
 };
 
 const STOP_NAMES: [(i64, &str); 4] = [(1, "A"), (2, "X"), (3, "Y"), (4, "B")];
@@ -110,4 +111,21 @@ fn main() {
     for (route_id, volume) in boardings {
         println!("  {}: {:.4}", route_id, volume);
     }
+
+    // Waiting time factor: the paper uses alpha = 1 (exponential arrivals,
+    // wait = full headway). A common practical choice is alpha = 0.5
+    // (constant interarrivals, wait = half the headway). It scales only
+    // the waiting term, so the line-choice proportions are unchanged.
+    let half_wait = assign_transit_with_options(
+        &network,
+        &od,
+        &TransitAssignmentOptions { wait_factor: 0.5 },
+    )
+    .expect("transit assignment failed");
+    println!("\nWith wait_factor = 0.5 (half-headway waiting):");
+    println!(
+        "  A -> B expected travel time: {:.2} min (was {:.2})",
+        half_wait.od_costs[&(1, 4)],
+        result.od_costs[&(1, 4)]
+    );
 }

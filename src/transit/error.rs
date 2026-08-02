@@ -20,6 +20,8 @@ pub enum TransitError {
     },
     /// A route has a zero or negative headway.
     NonPositiveHeadway { route_id: String },
+    /// The waiting time factor is not strictly positive.
+    InvalidWaitFactor { wait_factor: f64 },
     /// Two routes share the same id.
     DuplicateRouteId { route_id: String },
     /// An OD zone with demand is not a stop of any route or walk link.
@@ -58,6 +60,13 @@ impl fmt::Display for TransitError {
             }
             TransitError::NonPositiveHeadway { route_id } => {
                 write!(f, "route '{}' has non-positive headway", route_id)
+            }
+            TransitError::InvalidWaitFactor { wait_factor } => {
+                write!(
+                    f,
+                    "waiting time factor must be strictly positive, got {}",
+                    wait_factor
+                )
             }
             TransitError::DuplicateRouteId { route_id } => {
                 write!(f, "duplicate route id '{}'", route_id)
