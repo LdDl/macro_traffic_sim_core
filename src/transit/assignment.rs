@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hyperpaths_rs::{Link, compute_sf};
+use hyperpaths_rs::{Link, compute_sf, find_optimal_strategy};
 
 use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
@@ -136,6 +136,27 @@ fn arrival_node_name(route_id: &str, seq: usize) -> String {
 /// Departure node name in the two-node stop scheme (vehicle departs here).
 fn departure_node_name(route_id: &str, seq: usize) -> String {
     format!("{}#{}d", route_id, seq)
+}
+
+/// Validates the assignment options. Rejects non-positive or NaN
+/// `wait_factor` and negative or NaN penalties/dwell (NaN fails every
+/// comparison, so we test for a valid value rather than an invalid one).
+fn validate_options(options: &TransitAssignmentOptions) -> Result<(), TransitError> {
+    if options.wait_factor.is_nan() || options.wait_factor <= 0.0 {
+        return Err(TransitError::InvalidWaitFactor {
+            wait_factor: options.wait_factor,
+        });
+    }
+    for (name, value) in [
+        ("boarding_penalty", options.boarding_penalty),
+        ("alighting_penalty", options.alighting_penalty),
+        ("dwell_time", options.dwell_time),
+    ] {
+        if value.is_nan() || value < 0.0 {
+            return Err(TransitError::InvalidPenalty { name, value });
+        }
+    }
+    Ok(())
 }
 
 fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptions) -> RouteGraph {
@@ -551,31 +572,7 @@ pub fn assign_transit_with_options(
     options: &TransitAssignmentOptions,
 ) -> Result<TransitAssignmentResult, TransitError> {
     network.validate()?;
-    // Reject non-positive and NaN factors (NaN fails every comparison,
-    // so test for a valid value rather than an invalid one).
-    if options.wait_factor.is_nan() || options.wait_factor <= 0.0 {
-        return Err(TransitError::InvalidWaitFactor {
-            wait_factor: options.wait_factor,
-        });
-    }
-    if options.boarding_penalty.is_nan() || options.boarding_penalty < 0.0 {
-        return Err(TransitError::InvalidPenalty {
-            name: "boarding_penalty",
-            value: options.boarding_penalty,
-        });
-    }
-    if options.alighting_penalty.is_nan() || options.alighting_penalty < 0.0 {
-        return Err(TransitError::InvalidPenalty {
-            name: "alighting_penalty",
-            value: options.alighting_penalty,
-        });
-    }
-    if options.dwell_time.is_nan() || options.dwell_time < 0.0 {
-        return Err(TransitError::InvalidPenalty {
-            name: "dwell_time",
-            value: options.dwell_time,
-        });
-    }
+    validate_options(options)?;
     let graph = expand_route_graph(network, options);
 
     let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
@@ -676,6 +673,93 @@ pub fn assign_transit_with_options(
         total_boardings,
         total_demand,
     })
+}
+
+/// Computes the transit level-of-service (skim): the expected travel time
+/// between every ordered pair of the given zones, using default options.
+///
+/// See [`transit_skim_with_options`].
+pub fn transit_skim(
+    network: &TransitNetwork,
+    zones: &[i64],
+) -> Result<HashMap<(i64, i64), f64>, TransitError> {
+    transit_skim_with_options(network, zones, &TransitAssignmentOptions::default())
+}
+
+/// Computes the transit level-of-service (skim) with explicit options.
+///
+/// For every ordered pair `(origin, destination)` of `zones` the value is
+/// the optimal-strategy expected travel time (waiting + in-vehicle +
+/// walking), the same quantity that [`assign_transit`] reports in
+/// `od_costs`. Unlike an assignment, no demand is needed: the
+/// Spiess-Florian labels give the cost from every origin to a
+/// destination in a single solve and are independent of flow, so this
+/// runs one solve per destination zone and reads all origin labels.
+///
+/// Pairs that are unreachable (no transit path, or a zone that is not a
+/// stop) are omitted from the result rather than reported as infinite.
+///
+/// This is the transit counterpart of a road skim matrix: a
+/// destination-choice or mode-choice model can consume it directly.
+///
+/// # Arguments
+///
+/// * `network` - Transit routes and walk links
+/// * `zones` - Zone (stop) IDs to compute the skim over
+/// * `options` - Assignment options (waiting factor, penalties, dwell)
+///
+/// # Errors
+///
+/// Returns a [`TransitError`] when the network is structurally invalid or
+/// the options are out of range.
+///
+/// # Examples
+///
+/// ```
+/// use macro_traffic_sim_core::transit::{transit_skim, TransitNetwork, TransitRoute};
+///
+/// // one line, 10 min ride, 5 min headway
+/// let mut network = TransitNetwork::new();
+/// network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
+///
+/// let skim = transit_skim(&network, &[1, 2]).unwrap();
+/// // 1 -> 2 costs 5 wait + 10 ride; 2 -> 1 has no line, omitted
+/// assert!((skim[&(1, 2)] - 15.0).abs() < 1e-9);
+/// assert!(!skim.contains_key(&(2, 1)));
+/// ```
+pub fn transit_skim_with_options(
+    network: &TransitNetwork,
+    zones: &[i64],
+    options: &TransitAssignmentOptions,
+) -> Result<HashMap<(i64, i64), f64>, TransitError> {
+    network.validate()?;
+    validate_options(options)?;
+    let graph = expand_route_graph(network, options);
+
+    let mut skim: HashMap<(i64, i64), f64> = HashMap::new();
+    for &destination in zones {
+        // A destination that is not a stop yields no attractive links, so
+        // every origin stays at infinity and no pair is recorded.
+        if !graph.stops.contains(&destination) {
+            continue;
+        }
+        let destination_name = stop_name(destination);
+        let strategy = find_optimal_strategy(&graph.links, &graph.nodes, &destination_name);
+        for &origin in zones {
+            if origin == destination {
+                continue;
+            }
+            let label = strategy
+                .labels
+                .get(&stop_name(origin))
+                .copied()
+                .unwrap_or(f64::INFINITY);
+            if label.is_finite() {
+                skim.insert((origin, destination), label);
+            }
+        }
+    }
+    Ok(skim)
 }
 
 #[cfg(test)]
@@ -946,6 +1030,49 @@ mod tests {
         .unwrap();
         assert!((penalized.route_boardings["D"] - 100.0).abs() < EPS);
         assert!(penalized.route_boardings.get("B").copied().unwrap_or(0.0) < EPS);
+    }
+
+    #[test]
+    fn test_transit_skim_matches_od_costs() {
+        // The skim must equal what assign_transit reports as od_costs for
+        // the same pairs, since both are the phase-1 labels.
+        let network = paper_network();
+        let zones = [1, 2, 3, 4];
+
+        let skim = transit_skim(&network, &zones).unwrap();
+        // Paper labels: u_A = 27.75 (A -> B), u_X = 19.0714... (X -> B).
+        assert!((skim[&(1, 4)] - 27.75).abs() <= EPS);
+        assert!((skim[&(2, 4)] - 19.071428571428573).abs() <= EPS);
+
+        // Cross-check against an assignment over the same pairs.
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 1.0);
+        od.set(2, 4, 1.0);
+        let assigned = assign_transit(&network, &od).unwrap();
+        assert!((skim[&(1, 4)] - assigned.od_costs[&(1, 4)]).abs() <= EPS);
+        assert!((skim[&(2, 4)] - assigned.od_costs[&(2, 4)]).abs() <= EPS);
+    }
+
+    #[test]
+    fn test_transit_skim_omits_unreachable() {
+        // One-way line 1 -> 2: 1 -> 2 is reachable, 2 -> 1 is not.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+        let skim = transit_skim(&network, &[1, 2]).unwrap();
+        assert!(skim.contains_key(&(1, 2)));
+        assert!(!skim.contains_key(&(2, 1)));
+        // A zone that is not a stop produces no pairs at all.
+        let skim2 = transit_skim(&network, &[1, 2, 99]).unwrap();
+        assert!(!skim2.keys().any(|&(o, d)| o == 99 || d == 99));
+    }
+
+    #[test]
+    fn test_transit_skim_respects_options() {
+        // wait_factor 0.5 lowers the skim exactly as it lowers od_costs.
+        let network = paper_network();
+        let opts = TransitAssignmentOptions::new().with_wait_factor(0.5);
+        let skim = transit_skim_with_options(&network, &[1, 4], &opts).unwrap();
+        assert!((skim[&(1, 4)] - 25.25).abs() <= EPS);
     }
 
     #[test]

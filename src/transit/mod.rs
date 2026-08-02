@@ -83,7 +83,7 @@ pub mod route;
 
 pub use self::assignment::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
-    assign_transit, assign_transit_with_options,
+    assign_transit, assign_transit_with_options, transit_skim, transit_skim_with_options,
 };
 pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
 pub use self::error::TransitError;
