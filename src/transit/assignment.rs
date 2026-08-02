@@ -42,6 +42,10 @@ pub enum TransitLinkKind {
     Alighting,
     /// Route node -> route node: in-vehicle travel along one segment
     Riding,
+    /// Arrival node -> departure node: in-vehicle dwell at a stop.
+    /// Only present when the two-node stop scheme is active
+    /// (`dwell_time > 0`).
+    Dwell,
     /// Stop -> stop: walking transfer
     Walking,
 }
@@ -102,6 +106,16 @@ fn route_node_name(route_id: &str, seq: usize) -> String {
     format!("{}#{}", route_id, seq)
 }
 
+/// Arrival node name in the two-node stop scheme (vehicle arrives here).
+fn arrival_node_name(route_id: &str, seq: usize) -> String {
+    format!("{}#{}a", route_id, seq)
+}
+
+/// Departure node name in the two-node stop scheme (vehicle departs here).
+fn departure_node_name(route_id: &str, seq: usize) -> String {
+    format!("{}#{}d", route_id, seq)
+}
+
 fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptions) -> RouteGraph {
     let mut graph = RouteGraph {
         links: Vec::new(),
@@ -123,77 +137,164 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
         graph.index.insert(key, idx);
     };
 
+    let wait_of = |headway: f64| options.wait_factor * headway;
     for route in &network.routes {
         let last = route.stops.len() - 1;
-        for (seq, &stop) in route.stops.iter().enumerate() {
-            let node = route_node_name(&route.id, seq);
-            graph.nodes.insert(node.clone());
+        if options.dwell_time > 0.0 {
+            // Two-node stop scheme: each stop on the route splits into an
+            // arrival node (vehicle arrives, through riders and alighters
+            // are here) and a departure node (vehicle departs, boarders
+            // join here), with a dwell link between them. A through rider
+            // pays the full dwell at every intermediate stop; a boarding
+            // rider pays half of it (they board during the dwell), so the
+            // boarding link carries `boarding_penalty + 0.5 * dwell`.
+            let half_dwell = 0.5 * options.dwell_time;
+            for (seq, &stop) in route.stops.iter().enumerate() {
+                let arrival = arrival_node_name(&route.id, seq);
+                let departure = departure_node_name(&route.id, seq);
+                if seq > 0 {
+                    graph.nodes.insert(arrival.clone());
+                }
+                if seq < last {
+                    graph.nodes.insert(departure.clone());
+                }
 
-            // Boarding at every stop except the last one. The waiting
-            // time factor scales the effective headway: expected wait =
-            // wait_factor * headway. Since the solver derives freq =
-            // 1/headway and expected wait = 1/freq (alpha = 1 in the
-            // Spiess-Florian label), feeding an effective headway of
-            // wait_factor * headway is exactly the paper's WLOG (without loss of generality)
-            // frequency scaling (p. 91): all boarding links at a stop are scaled by
-            // the same factor, so the line-choice proportions f_a/f_i are
-            // unchanged and only the waiting term moves. The boarding
-            // penalty is a plain cost on the same link (charged once per
-            // boarding, hence per transfer).
-            if seq < last {
-                push(
-                    &mut graph,
-                    Link::new(
-                        &stop_name(stop),
-                        &node,
-                        &route.id,
-                        options.boarding_penalty,
-                        options.wait_factor * route.headway,
-                    ),
-                    LinkMeta {
-                        kind: TransitLinkKind::Boarding,
-                        route_id: Some(route.id.clone()),
-                        from_stop: stop,
-                        to_stop: stop,
-                    },
-                );
+                // Boarding: stop -> departure node
+                if seq < last {
+                    push(
+                        &mut graph,
+                        Link::new(
+                            &stop_name(stop),
+                            &departure,
+                            &route.id,
+                            options.boarding_penalty + half_dwell,
+                            wait_of(route.headway),
+                        ),
+                        LinkMeta {
+                            kind: TransitLinkKind::Boarding,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: stop,
+                        },
+                    );
+                }
+
+                // Alighting: arrival node -> stop
+                if seq > 0 {
+                    push(
+                        &mut graph,
+                        Link::new(&arrival, &stop_name(stop), &route.id, options.alighting_penalty, 0.0),
+                        LinkMeta {
+                            kind: TransitLinkKind::Alighting,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: stop,
+                        },
+                    );
+                }
+
+                // Dwell: arrival node -> departure node (through riders)
+                if seq > 0 && seq < last {
+                    push(
+                        &mut graph,
+                        Link::new(&arrival, &departure, &route.id, options.dwell_time, 0.0),
+                        LinkMeta {
+                            kind: TransitLinkKind::Dwell,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: stop,
+                        },
+                    );
+                }
+
+                // Riding: departure node -> next arrival node
+                if seq < last {
+                    let next_arrival = arrival_node_name(&route.id, seq + 1);
+                    push(
+                        &mut graph,
+                        Link::new(&departure, &next_arrival, &route.id, route.segment_times[seq], 0.0),
+                        LinkMeta {
+                            kind: TransitLinkKind::Riding,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: route.stops[seq + 1],
+                        },
+                    );
+                }
             }
+        } else {
+            // One-node stop scheme (dwell = 0): the plain Spiess-Florian
+            // construction, one route node per stop.
+            for (seq, &stop) in route.stops.iter().enumerate() {
+                let node = route_node_name(&route.id, seq);
+                graph.nodes.insert(node.clone());
 
-            // Alighting at every stop except the first one. Still a
-            // no-wait link (headway 0); the alighting penalty is a plain
-            // cost on it.
-            if seq > 0 {
-                push(
-                    &mut graph,
-                    Link::new(
-                        &node,
-                        &stop_name(stop),
-                        &route.id,
-                        options.alighting_penalty,
-                        0.0,
-                    ),
-                    LinkMeta {
-                        kind: TransitLinkKind::Alighting,
-                        route_id: Some(route.id.clone()),
-                        from_stop: stop,
-                        to_stop: stop,
-                    },
-                );
-            }
+                // Boarding at every stop except the last one. The waiting
+                // time factor scales the effective headway: expected wait =
+                // wait_factor * headway. Since the solver derives freq =
+                // 1/headway and expected wait = 1/freq (alpha = 1 in the
+                // Spiess-Florian label), feeding an effective headway of
+                // wait_factor * headway is exactly the paper's WLOG (without
+                // loss of generality) frequency scaling (p. 91): all boarding
+                // links at a stop are scaled by the same factor, so the
+                // line-choice proportions f_a/f_i are unchanged and only the
+                // waiting term moves. The boarding penalty is a plain cost on
+                // the same link (charged once per boarding, hence per transfer).
+                if seq < last {
+                    push(
+                        &mut graph,
+                        Link::new(
+                            &stop_name(stop),
+                            &node,
+                            &route.id,
+                            options.boarding_penalty,
+                            wait_of(route.headway),
+                        ),
+                        LinkMeta {
+                            kind: TransitLinkKind::Boarding,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: stop,
+                        },
+                    );
+                }
 
-            // Riding to the next stop
-            if seq < last {
-                let next_node = route_node_name(&route.id, seq + 1);
-                push(
-                    &mut graph,
-                    Link::new(&node, &next_node, &route.id, route.segment_times[seq], 0.0),
-                    LinkMeta {
-                        kind: TransitLinkKind::Riding,
-                        route_id: Some(route.id.clone()),
-                        from_stop: stop,
-                        to_stop: route.stops[seq + 1],
-                    },
-                );
+                // Alighting at every stop except the first one. Still a
+                // no-wait link (headway 0); the alighting penalty is a plain
+                // cost on it.
+                if seq > 0 {
+                    push(
+                        &mut graph,
+                        Link::new(
+                            &node,
+                            &stop_name(stop),
+                            &route.id,
+                            options.alighting_penalty,
+                            0.0,
+                        ),
+                        LinkMeta {
+                            kind: TransitLinkKind::Alighting,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: stop,
+                        },
+                    );
+                }
+
+                // Riding to the next stop
+                if seq < last {
+                    let next_node = route_node_name(&route.id, seq + 1);
+                    push(
+                        &mut graph,
+                        Link::new(&node, &next_node, &route.id, route.segment_times[seq], 0.0),
+                        LinkMeta {
+                            kind: TransitLinkKind::Riding,
+                            route_id: Some(route.id.clone()),
+                            from_stop: stop,
+                            to_stop: route.stops[seq + 1],
+                        },
+                    );
+                }
             }
         }
     }
@@ -252,6 +353,19 @@ pub struct TransitAssignmentOptions {
     ///
     /// Default `0.0`. Must be non-negative.
     pub alighting_penalty: f64,
+
+    /// In-vehicle dwell time spent standing at a stop, in the same time
+    /// units as the segment travel times. A through passenger (staying on
+    /// board) pays the full dwell at every intermediate stop; a boarding
+    /// passenger pays half of it on average (they board during the dwell).
+    ///
+    /// A positive dwell switches the route expansion to a two-node stop
+    /// scheme (separate arrival and departure nodes with a dwell link
+    /// between them). With the default `0.0` the one-node scheme is used,
+    /// identical to the plain Spiess-Florian construction.
+    ///
+    /// Default `0.0`. Must be non-negative.
+    pub dwell_time: f64,
 }
 
 impl Default for TransitAssignmentOptions {
@@ -260,6 +374,7 @@ impl Default for TransitAssignmentOptions {
             wait_factor: 1.0,
             boarding_penalty: 0.0,
             alighting_penalty: 0.0,
+            dwell_time: 0.0,
         }
     }
 }
@@ -371,6 +486,12 @@ pub fn assign_transit_with_options(
         return Err(TransitError::InvalidPenalty {
             name: "alighting_penalty",
             value: options.alighting_penalty,
+        });
+    }
+    if options.dwell_time.is_nan() || options.dwell_time < 0.0 {
+        return Err(TransitError::InvalidPenalty {
+            name: "dwell_time",
+            value: options.dwell_time,
         });
     }
     let graph = expand_route_graph(network, options);
@@ -741,6 +862,90 @@ mod tests {
     }
 
     #[test]
+    fn test_dwell_two_node_scheme() {
+        // Line 1 -> 2 -> 3, segments 10 + 10, headway 6, default alpha.
+        // A through rider from 1 to 3 pays: 0.5*dwell on boarding (they
+        // board during the dwell at stop 1) + 6 wait + 10 ride + dwell at
+        // the intermediate stop 2 + 10 ride + 0 alighting at destination.
+        // With dwell = 4: 2 (half dwell) + 6 + 10 + 4 + 10 = 32.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2, 3], vec![10.0, 10.0], 6.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 3, 100.0);
+
+        let dwell = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                dwell_time: 4.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            (dwell.od_costs[&(1, 3)] - 32.0).abs() < EPS,
+            "through cost = {}, want 32",
+            dwell.od_costs[&(1, 3)]
+        );
+
+        // A boarder-then-alight-at-2 trip (1 -> 2) pays only the half
+        // dwell at boarding, not the full intermediate dwell:
+        // 0.5*4 + 6 + 10 = 18.
+        od.set(1, 3, 0.0);
+        od.set(1, 2, 100.0);
+        let short = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                dwell_time: 4.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            (short.od_costs[&(1, 2)] - 18.0).abs() < EPS,
+            "short cost = {}, want 18",
+            short.od_costs[&(1, 2)]
+        );
+
+        // The dwell link appears in the typed volumes and carries the
+        // through flow at the intermediate stop.
+        let dwell_link = dwell
+            .link_volumes
+            .iter()
+            .find(|lv| lv.kind == TransitLinkKind::Dwell)
+            .expect("dwell link present");
+        assert_eq!(dwell_link.from_stop, 2);
+        assert!((dwell_link.volume - 100.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_dwell_zero_matches_one_node() {
+        // dwell = 0 must reproduce the plain one-node scheme exactly:
+        // no dwell links, and the paper's 27.75 min result unchanged.
+        let network = paper_network();
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 1.0);
+
+        let result = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                dwell_time: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!((result.od_costs[&(1, 4)] - 27.75).abs() <= EPS);
+        assert!(
+            !result
+                .link_volumes
+                .iter()
+                .any(|lv| lv.kind == TransitLinkKind::Dwell)
+        );
+    }
+
+    #[test]
     fn test_invalid_penalty() {
         let mut network = TransitNetwork::new();
         network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
@@ -765,6 +970,17 @@ mod tests {
                     &od,
                     &TransitAssignmentOptions {
                         alighting_penalty: bad,
+                        ..Default::default()
+                    }
+                ),
+                Err(TransitError::InvalidPenalty { .. })
+            ));
+            assert!(matches!(
+                assign_transit_with_options(
+                    &network,
+                    &od,
+                    &TransitAssignmentOptions {
+                        dwell_time: bad,
                         ..Default::default()
                     }
                 ),
