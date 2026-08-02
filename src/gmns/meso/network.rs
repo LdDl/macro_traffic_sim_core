@@ -132,11 +132,14 @@ impl Network {
 
     /// Add a location (point along a link) to the network.
     ///
-    /// The referenced link must already exist.
+    /// The referenced link must already exist and the linear reference
+    /// offset `lr` must place the location on it: `0 <= lr <= link length`.
+    /// The upper bound is only checked when the link has a positive length
+    /// (links built without one skip it).
     ///
     /// # Returns
-    /// Error if a location with the same ID already exists or the
-    /// referenced link is missing.
+    /// Error if a location with the same ID already exists, the referenced
+    /// link is missing, or `lr` is outside `[0, link length]`.
     ///
     /// # Examples
     ///
@@ -166,6 +169,11 @@ impl Network {
     /// // referencing a missing link is rejected
     /// let dangling = Location::new(501, 999, 1, 0.0).build();
     /// assert!(net.add_location(dangling).is_err());
+    ///
+    /// // an offset past the end of a measured link is rejected
+    /// net.add_link(Link::new(200, 1, 2).with_length_meters(500.0).build()).unwrap();
+    /// let off_link = Location::new(502, 200, 1, 600.0).build();
+    /// assert!(net.add_location(off_link).is_err());
     /// ```
     pub fn add_location(&mut self, location: Location) -> Result<(), SimError> {
         let id = location.id;
@@ -176,9 +184,27 @@ impl Network {
             }
             .into());
         }
-        if !self.links.contains_key(&location.link_id) {
-            return Err(GraphError::LinkNotFound {
+        let link = match self.links.get(&location.link_id) {
+            Some(link) => link,
+            None => {
+                return Err(GraphError::LinkNotFound {
+                    link_id: location.link_id,
+                }
+                .into());
+            }
+        };
+        // The linear reference offset must place the location on the link.
+        // A positive link length is required to validate the upper bound;
+        // links built without a length (0.0) skip it.
+        if location.lr.is_nan()
+            || location.lr < 0.0
+            || (link.length_meters > 0.0 && location.lr > link.length_meters)
+        {
+            return Err(GraphError::LocationOffsetOutOfRange {
+                location_id: id,
                 link_id: location.link_id,
+                lr: location.lr,
+                link_length: link.length_meters,
             }
             .into());
         }
