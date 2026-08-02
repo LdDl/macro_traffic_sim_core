@@ -102,7 +102,7 @@ fn route_node_name(route_id: &str, seq: usize) -> String {
     format!("{}#{}", route_id, seq)
 }
 
-fn expand_route_graph(network: &TransitNetwork, wait_factor: f64) -> RouteGraph {
+fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptions) -> RouteGraph {
     let mut graph = RouteGraph {
         links: Vec::new(),
         meta: Vec::new(),
@@ -137,7 +137,9 @@ fn expand_route_graph(network: &TransitNetwork, wait_factor: f64) -> RouteGraph 
             // wait_factor * headway is exactly the paper's WLOG (without loss of generality)
             // frequency scaling (p. 91): all boarding links at a stop are scaled by
             // the same factor, so the line-choice proportions f_a/f_i are
-            // unchanged and only the waiting term moves.
+            // unchanged and only the waiting term moves. The boarding
+            // penalty is a plain cost on the same link (charged once per
+            // boarding, hence per transfer).
             if seq < last {
                 push(
                     &mut graph,
@@ -145,8 +147,8 @@ fn expand_route_graph(network: &TransitNetwork, wait_factor: f64) -> RouteGraph 
                         &stop_name(stop),
                         &node,
                         &route.id,
-                        0.0,
-                        wait_factor * route.headway,
+                        options.boarding_penalty,
+                        options.wait_factor * route.headway,
                     ),
                     LinkMeta {
                         kind: TransitLinkKind::Boarding,
@@ -157,11 +159,19 @@ fn expand_route_graph(network: &TransitNetwork, wait_factor: f64) -> RouteGraph 
                 );
             }
 
-            // Alighting at every stop except the first one
+            // Alighting at every stop except the first one. Still a
+            // no-wait link (headway 0); the alighting penalty is a plain
+            // cost on it.
             if seq > 0 {
                 push(
                     &mut graph,
-                    Link::new(&node, &stop_name(stop), &route.id, 0.0, 0.0),
+                    Link::new(
+                        &node,
+                        &stop_name(stop),
+                        &route.id,
+                        options.alighting_penalty,
+                        0.0,
+                    ),
                     LinkMeta {
                         kind: TransitLinkKind::Alighting,
                         route_id: Some(route.id.clone()),
@@ -226,11 +236,31 @@ pub struct TransitAssignmentOptions {
     ///
     /// Must be strictly positive.
     pub wait_factor: f64,
+
+    /// Penalty added to every boarding, in the same time units as the
+    /// segment travel times (a perceived cost of boarding a vehicle). It
+    /// is charged once per boarding, so it also acts as a transfer
+    /// penalty: any strategy that boards a second line pays it again,
+    /// which discourages unnecessary transfers.
+    ///
+    /// Default `0.0`. Must be non-negative.
+    pub boarding_penalty: f64,
+
+    /// Penalty added to every alighting, in the same time units as the
+    /// segment travel times (a perceived cost of leaving a vehicle,
+    /// including the final one at the destination).
+    ///
+    /// Default `0.0`. Must be non-negative.
+    pub alighting_penalty: f64,
 }
 
 impl Default for TransitAssignmentOptions {
     fn default() -> Self {
-        Self { wait_factor: 1.0 }
+        Self {
+            wait_factor: 1.0,
+            boarding_penalty: 0.0,
+            alighting_penalty: 0.0,
+        }
     }
 }
 
@@ -314,7 +344,7 @@ pub fn assign_transit(
 /// od.set(1, 2, 100.0);
 ///
 /// // wait_factor 0.5 halves the waiting time: 2.5 min wait + 10 min ride
-/// let options = TransitAssignmentOptions { wait_factor: 0.5 };
+/// let options = TransitAssignmentOptions { wait_factor: 0.5, ..Default::default() };
 /// let result = assign_transit_with_options(&network, &od, &options).unwrap();
 /// assert!((result.od_costs[&(1, 2)] - 12.5).abs() < 1e-6);
 /// ```
@@ -331,7 +361,19 @@ pub fn assign_transit_with_options(
             wait_factor: options.wait_factor,
         });
     }
-    let graph = expand_route_graph(network, options.wait_factor);
+    if options.boarding_penalty.is_nan() || options.boarding_penalty < 0.0 {
+        return Err(TransitError::InvalidPenalty {
+            name: "boarding_penalty",
+            value: options.boarding_penalty,
+        });
+    }
+    if options.alighting_penalty.is_nan() || options.alighting_penalty < 0.0 {
+        return Err(TransitError::InvalidPenalty {
+            name: "alighting_penalty",
+            value: options.alighting_penalty,
+        });
+    }
+    let graph = expand_route_graph(network, options);
 
     let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
     let mut od_costs: HashMap<(i64, i64), f64> = HashMap::new();
@@ -543,7 +585,10 @@ mod tests {
         let half = assign_transit_with_options(
             &network,
             &od,
-            &TransitAssignmentOptions { wait_factor: 0.5 },
+            &TransitAssignmentOptions {
+                wait_factor: 0.5,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!((half.od_costs[&(1, 2)] - 13.0).abs() < EPS);
@@ -568,7 +613,10 @@ mod tests {
             let result = assign_transit_with_options(
                 &network,
                 &od,
-                &TransitAssignmentOptions { wait_factor },
+                &TransitAssignmentOptions {
+                    wait_factor,
+                    ..Default::default()
+                },
             )
             .unwrap();
             assert!(
@@ -593,9 +641,134 @@ mod tests {
                 assign_transit_with_options(
                     &network,
                     &od,
-                    &TransitAssignmentOptions { wait_factor: bad }
+                    &TransitAssignmentOptions {
+                        wait_factor: bad,
+                        ..Default::default()
+                    }
                 ),
                 Err(TransitError::InvalidWaitFactor { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn test_boarding_and_alighting_penalties() {
+        // Single line: 6 min wait (default alpha) + 10 min ride. A
+        // boarding penalty and an alighting penalty are plain costs added
+        // once each on the traveled path (board once, alight once at the
+        // destination).
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 100.0);
+
+        let boarding = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                boarding_penalty: 2.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!((boarding.od_costs[&(1, 2)] - 18.0).abs() < EPS);
+
+        let alighting = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                alighting_penalty: 3.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!((alighting.od_costs[&(1, 2)] - 19.0).abs() < EPS);
+
+        let both = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                boarding_penalty: 2.0,
+                alighting_penalty: 3.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!((both.od_costs[&(1, 2)] - 21.0).abs() < EPS);
+        // Penalties do not change a single-line loading.
+        assert!((both.route_boardings["L1"] - 100.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_boarding_penalty_discourages_transfer() {
+        // Direct line D (1 -> 3, 20 min) competes with a two-leg trip via
+        // a transfer: line A (1 -> 2, 8 min) then line B (2 -> 3, 8 min).
+        // All headways are 6. Without a penalty the optimal strategy at
+        // node 1 is {D, A}: sharing the wait for either vehicle makes the
+        // transfer worthwhile (expected 24 min, versus 26 riding D alone),
+        // so some passengers take A and transfer to B. A boarding penalty
+        // is charged on every boarding, so the transfer path pays it twice
+        // and, once large enough, {D, A} (39 min) becomes worse than D
+        // alone (36 min): the whole strategy collapses onto the direct
+        // line and B carries nothing.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("D", vec![1, 3], vec![20.0], 6.0));
+        network.add_route(TransitRoute::new("A", vec![1, 2], vec![8.0], 6.0));
+        network.add_route(TransitRoute::new("B", vec![2, 3], vec![8.0], 6.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 3, 100.0);
+
+        let no_penalty = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions::default(),
+        )
+        .unwrap();
+        // The transfer path is used: line B carries flow on 2 -> 3.
+        assert!(no_penalty.route_boardings.get("B").copied().unwrap_or(0.0) > 0.0);
+
+        let penalized = assign_transit_with_options(
+            &network,
+            &od,
+            &TransitAssignmentOptions {
+                boarding_penalty: 10.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!((penalized.route_boardings["D"] - 100.0).abs() < EPS);
+        assert!(penalized.route_boardings.get("B").copied().unwrap_or(0.0) < EPS);
+    }
+
+    #[test]
+    fn test_invalid_penalty() {
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 1.0);
+
+        for bad in [-1.0, f64::NAN] {
+            assert!(matches!(
+                assign_transit_with_options(
+                    &network,
+                    &od,
+                    &TransitAssignmentOptions {
+                        boarding_penalty: bad,
+                        ..Default::default()
+                    }
+                ),
+                Err(TransitError::InvalidPenalty { .. })
+            ));
+            assert!(matches!(
+                assign_transit_with_options(
+                    &network,
+                    &od,
+                    &TransitAssignmentOptions {
+                        alighting_penalty: bad,
+                        ..Default::default()
+                    }
+                ),
+                Err(TransitError::InvalidPenalty { .. })
             ));
         }
     }

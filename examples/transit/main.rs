@@ -119,7 +119,10 @@ fn main() {
     let half_wait = assign_transit_with_options(
         &network,
         &od,
-        &TransitAssignmentOptions { wait_factor: 0.5 },
+        &TransitAssignmentOptions {
+            wait_factor: 0.5,
+            ..Default::default()
+        },
     )
     .expect("transit assignment failed");
     println!("\nWith wait_factor = 0.5 (half-headway waiting):");

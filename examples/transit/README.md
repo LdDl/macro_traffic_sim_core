@@ -132,6 +132,17 @@ attractive are unchanged (this is the paper's frequency-scaling remark,
 p. 91). Implemented core-side: the solver is untouched, boarding links
 are simply built with an effective headway of `wait_factor * headway`.
 
+## Boarding and alighting penalties
+
+`TransitAssignmentOptions` also carries `boarding_penalty` and
+`alighting_penalty` (default `0.0`), plain perceived costs in the same
+time units as the segment times:
+
+- `boarding_penalty` is charged on every boarding link. Because a strategy boards once per line, it doubles as a transfer penalty: a trip that transfers pays it again, which discourages unnecessary transfers. On this network a large boarding penalty makes the direct Line 1 dominate and suppresses the Line 2 -> Line 4/3 transfer.
+- `alighting_penalty` is charged on every alighting link, including the final one at the destination.
+
+Both are plain costs on links that already exist in the expansion, so no two-node stop scheme is needed for them (that is only required for in-vehicle dwell time, which is future work).
+
 ## Reference
 
 Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment model for transit networks". Transportation Research Part B 23(2), 83-102. DOI: [10.1016/0191-2615(89)90034-9](https://doi.org/10.1016/0191-2615(89)90034-9)
