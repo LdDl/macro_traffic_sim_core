@@ -105,6 +105,8 @@ Expected travel time A -> B: **27.75 min** (matches the paper).
 
 Half the passengers take Line 1 directly; the other half rides Line 2 to Y and there splits between Line 4 and Line 3 proportionally to their frequencies (1/3 vs 1/15).
 
+The result also carries network-wide aggregates: `total_boardings = 1.5` and `transfers() = 0.5`. Every trip boards once (1.0), and the Line 2 half boards a second time when it transfers at Y (0.5 extra), so `transfers = total_boardings - total_demand = 0.5`.
+
 ## Waiting time factor
 
 The expected wait at a stop is `wait_factor / combined_frequency`. The
@@ -118,7 +120,7 @@ paper (p. 91) calls this the `alpha` parameter:
   "the most widely used approach in practice", despite being a rough
   approximation.
 
-`assign_transit_with_options(&network, &od, &TransitAssignmentOptions { wait_factor: 0.5 })`
+`assign_transit_with_options(&network, &od, &TransitAssignmentOptions::new().with_wait_factor(0.5))`
 runs the same assignment with half-headway waiting. On this network the
 A -> B expected travel time drops from 27.75 to **25.25 min**. Note this
 is not a simple constant subtraction: cheaper waiting can change the
