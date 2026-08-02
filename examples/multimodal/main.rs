@@ -122,6 +122,7 @@ fn main() {
         Some(TransitInput {
             network: &transit_network,
             options: TransitAssignmentOptions::default(),
+            fixed_od: None,
         }),
         None,
     )

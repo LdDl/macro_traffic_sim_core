@@ -72,6 +72,14 @@ pub struct TransitInput<'a> {
     pub network: &'a TransitNetwork,
     /// Assignment options (waiting factor, penalties, dwell).
     pub options: TransitAssignmentOptions,
+    /// Fixed exogenous transit demand added on top of the mode-choice
+    /// share before assignment, `None` for none. Use it for demand that
+    /// must not go through mode choice - captive riders with no car, a
+    /// known external matrix, a scenario constraint. It is added to (not
+    /// substituted for) the endogenous transit OD, so a logit without a
+    /// transit alternative simply assigns this matrix alone. Must use the
+    /// road zone IDs; entries on other zones are ignored.
+    pub fixed_od: Option<&'a dyn OdMatrix>,
 }
 
 /// Result of the complete 4-step model pipeline.
@@ -443,16 +451,37 @@ pub fn run_four_step_model(
         if fb_iter + 1 == max_feedback {
             // Assign the final transit demand with optimal strategies. Done
             // once here (not per feedback iteration) since only the last
-            // split matters; skipped when the split produced no transit
-            // demand (no transit input, or a logit without a transit mode).
-            let transit_result = match (&transit, mode_od.get(&AgentType::Transit)) {
-                (Some(t), Some(transit_od)) if transit_od.total() > 0.0 => {
-                    let step_start = Instant::now();
-                    let result = assign_transit_with_options(t.network, transit_od, &t.options)?;
-                    t_assignment += step_start.elapsed();
-                    Some(result)
+            // split matters. The demand is the mode-choice transit share
+            // (if any) plus the optional fixed exogenous matrix; skipped
+            // when both are empty.
+            let transit_result = match &transit {
+                Some(t) => {
+                    let mut transit_od = mode_od
+                        .get(&AgentType::Transit)
+                        .cloned()
+                        .unwrap_or_else(|| DenseOdMatrix::new(zone_ids.clone()));
+                    if let Some(fixed) = t.fixed_od {
+                        for &o in &zone_ids {
+                            for &d in &zone_ids {
+                                let extra = fixed.get(o, d);
+                                if extra != 0.0 {
+                                    let current = transit_od.get(o, d);
+                                    transit_od.set(o, d, current + extra);
+                                }
+                            }
+                        }
+                    }
+                    if transit_od.total() > 0.0 {
+                        let step_start = Instant::now();
+                        let result =
+                            assign_transit_with_options(t.network, &transit_od, &t.options)?;
+                        t_assignment += step_start.elapsed();
+                        Some(result)
+                    } else {
+                        None
+                    }
                 }
-                _ => None,
+                None => None,
             };
 
             log_main!(
@@ -855,6 +884,7 @@ mod tests {
             Some(TransitInput {
                 network: &transit_net,
                 options: TransitAssignmentOptions::default(),
+                fixed_od: None,
             }),
             None,
         )
@@ -872,5 +902,85 @@ mod tests {
         // so all transit demand is on 1 -> 2).
         assert!(transit.total_boardings > 0.0);
         assert!((transit.od_costs[&(1, 2)] - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipeline_fixed_transit_od_adds_to_mode_choice_share() {
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        // Endogenous demand only, to read the baseline transit total.
+        let base = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: None,
+            }),
+            None,
+        )
+        .unwrap();
+        let base_demand = base.transit.unwrap().total_demand;
+
+        // 500 captive riders on 1 -> 2, added on top of the mode-choice share.
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 500.0);
+        let with_fixed = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+            }),
+            None,
+        )
+        .unwrap();
+        let with_demand = with_fixed.transit.unwrap().total_demand;
+
+        // The fixed 500 are added on top of the endogenous share.
+        assert!((with_demand - base_demand - 500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pipeline_fixed_transit_od_without_transit_mode() {
+        // A logit with no transit alternative, but a fixed transit matrix:
+        // the fixed demand alone is assigned, mode choice adds nothing.
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 300.0);
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+            }),
+            None,
+        )
+        .unwrap();
+        // No transit mode in the logit -> mode_od has no transit share.
+        assert!(!result.mode_od.contains_key(&AgentType::Transit));
+        // The fixed 300 are still assigned.
+        let transit = result.transit.expect("fixed transit assigned");
+        assert!((transit.total_demand - 300.0).abs() < 1e-6);
     }
 }
