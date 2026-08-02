@@ -52,6 +52,14 @@ pub enum GraphError {
     ZoneNotFound { zone_id: i64 },
     /// Duplicate entity ID.
     DuplicateId { entity: String, id: i64 },
+    /// A location's linear reference offset is outside its link
+    /// (`lr` must lie in `[0, link length]`).
+    LocationOffsetOutOfRange {
+        location_id: i64,
+        link_id: i64,
+        lr: f64,
+        link_length: f64,
+    },
     /// Invalid network topology.
     InvalidTopology(String),
 }
@@ -73,6 +81,18 @@ impl fmt::Display for GraphError {
             }
             GraphError::DuplicateId { entity, id } => {
                 write!(f, "duplicate {} id: {}", entity, id)
+            }
+            GraphError::LocationOffsetOutOfRange {
+                location_id,
+                link_id,
+                lr,
+                link_length,
+            } => {
+                write!(
+                    f,
+                    "location {} has offset lr = {} outside link {} (length {})",
+                    location_id, lr, link_id, link_length
+                )
             }
             GraphError::InvalidTopology(msg) => {
                 write!(f, "invalid topology: {}", msg)
