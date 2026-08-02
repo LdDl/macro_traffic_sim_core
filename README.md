@@ -47,6 +47,18 @@ Trip Generation
       (repeat N times)
 ```
 
+## Public transit
+
+Alongside the road model the library assigns frequency-based public transit with the optimal strategies algorithm (Spiess & Florian, 1989).
+
+Passengers do not pick a single line: at each stop they choose a set of attractive lines and board whichever vehicle comes first, so flow splits between competing lines in proportion to their frequencies.
+
+- **Lines over stops.** - a `TransitRoute` is an ordered list of stops with per-segment travel times and a headway. Stops are GMNS `location` records - points pinned to road links (`link_id` + offset). The road graph is never split or modified; the `location` is the single bridge between the two layers, and no map matching is performed.
+- **Zone access.** - zone centroids join as pseudo-stops via walk links to several candidate stops; the algorithm itself picks the access stop  per destination (no nearest-stop heuristic).
+- **GTFS input.** - a frequency-based GTFS Schedule dataset is converted into routes: trips are grouped into patterns by stop sequence headways come from `frequencies.txt`, `stop_times` provide relative travel profiles.
+
+The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) crate; the assignment is solved by [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs). Transit demand is currently a separate exogenous OD table (mode choice with a transit alternative is future work). See the `transit`, `transit_gtfs`, `gtfs_patterns` and `multimodal` examples.
+
 ## Network format
 
 The library works on a **mesoscopic** (meso) network based on the
@@ -58,6 +70,8 @@ The library works on a **mesoscopic** (meso) network based on the
   exists only if the turn is allowed. This encodes turn restrictions directly
   in the graph topology - routing algorithms respect them automatically
   without any extra logic.
+- **Locations** - GMNS `location` records: points along a link (`link_id` +
+  offset), optionally carrying a `gtfs_stop_id`. Used as transit stops; they annotate the road graph without splitting it.
 
 The library does not include I/O or CSV parsing. You build the `Network`
 in code or write your own loader (see the examples).
