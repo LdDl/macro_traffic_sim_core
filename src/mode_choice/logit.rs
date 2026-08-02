@@ -77,6 +77,38 @@ use crate::verbose::EVENT_MODE_CHOICE;
 
 use super::utility::ModeUtility;
 
+
+/// Typical (illustrative, not calibrated) mode-choice coefficients used by
+/// the `default_*` constructors. Real applications must calibrate their own
+/// against observed mode shares; these are placeholders for examples and
+/// tests, ordered so that AUTO is the most attractive base mode.
+///
+/// The constants are part of the public API and can be referenced directly:
+///
+/// ```
+/// use macro_traffic_sim_core::mode_choice::default_coefficients::TRANSIT_ASC;
+/// assert_eq!(TRANSIT_ASC, -0.5);
+/// ```
+pub mod default_coefficients {
+    /// AUTO alternative-specific constant.
+    pub const AUTO_ASC: f64 = 0.0;
+    /// AUTO in-vehicle time coefficient (per minute).
+    pub const AUTO_COEFF_TIME: f64 = -0.03;
+    /// BIKE alternative-specific constant.
+    pub const BIKE_ASC: f64 = -1.0;
+    /// BIKE time coefficient (per minute).
+    pub const BIKE_COEFF_TIME: f64 = -0.05;
+    /// WALK alternative-specific constant.
+    pub const WALK_ASC: f64 = -2.0;
+    /// WALK time coefficient (per minute).
+    pub const WALK_COEFF_TIME: f64 = -0.08;
+    /// TRANSIT alternative-specific constant.
+    pub const TRANSIT_ASC: f64 = -0.5;
+    /// TRANSIT time coefficient (per minute).
+    pub const TRANSIT_COEFF_TIME: f64 = -0.04;
+}
+
+
 /// Skim data for a single mode: time, distance, and cost matrices.
 ///
 /// Each field is a zone-to-zone matrix. Values are used by
@@ -109,6 +141,69 @@ pub struct ModeSkim {
     pub distance: Rc<DenseOdMatrix>,
     /// Monetary cost matrix. Shared across modes via Rc.
     pub cost: Rc<DenseOdMatrix>,
+}
+
+impl ModeSkim {
+    /// Builds a mode skim whose time matrix comes from a sparse cost map,
+    /// such as the output of
+    /// [`transit_skim`](crate::transit::transit_skim).
+    ///
+    /// Each `(origin, destination)` present in `time_map` gets that time;
+    /// every other off-diagonal pair is set to `f64::INFINITY`, meaning the
+    /// mode is unavailable for that pair (its logit utility goes to minus
+    /// infinity, so it receives zero share). `distance` and `cost` are
+    /// taken as given (a transit fare matrix, or the shared road matrices).
+    ///
+    /// # Arguments
+    ///
+    /// * `zone_ids` - Zone IDs defining the matrix dimensions
+    /// * `time_map` - `(origin, destination) -> travel time` (sparse)
+    /// * `distance` - Distance matrix for the mode
+    /// * `cost` - Monetary cost matrix for the mode
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use std::rc::Rc;
+    /// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
+    /// use macro_traffic_sim_core::mode_choice::ModeSkim;
+    ///
+    /// let zones = vec![1, 2];
+    /// let time_map = HashMap::from([((1, 2), 15.0)]);
+    /// let skim = ModeSkim::from_time_map(
+    ///     &zones,
+    ///     &time_map,
+    ///     Rc::new(DenseOdMatrix::new(zones.clone())),
+    ///     Rc::new(DenseOdMatrix::new(zones.clone())),
+    /// );
+    /// assert_eq!(skim.time.get(1, 2), 15.0);
+    /// // the unspecified 2 -> 1 pair is unavailable
+    /// assert!(skim.time.get(2, 1).is_infinite());
+    /// ```
+    pub fn from_time_map(
+        zone_ids: &[crate::gmns::types::ZoneID],
+        time_map: &std::collections::HashMap<(i64, i64), f64>,
+        distance: Rc<DenseOdMatrix>,
+        cost: Rc<DenseOdMatrix>,
+    ) -> Self {
+        let mut time = DenseOdMatrix::new(zone_ids.to_vec());
+        for &o in zone_ids {
+            for &d in zone_ids {
+                if o != d {
+                    time.set(o, d, f64::INFINITY);
+                }
+            }
+        }
+        for (&(o, d), &t) in time_map {
+            time.set(o, d, t);
+        }
+        ModeSkim {
+            time,
+            distance,
+            cost,
+        }
+    }
 }
 
 /// Multinomial logit mode choice model.
@@ -163,7 +258,8 @@ impl MultinomialLogit {
 
     /// Create a default logit model for AUTO, BIKE, WALK.
     ///
-    /// Uses typical coefficients:
+    /// Uses the typical (illustrative) coefficients from
+    /// [`default_coefficients`]:
     /// - AUTO: ASC=0, time=-0.03
     /// - BIKE: ASC=-1.0, time=-0.05
     /// - WALK: ASC=-2.0, time=-0.08
@@ -177,22 +273,58 @@ impl MultinomialLogit {
     /// assert_eq!(model.utilities.len(), 3);
     /// ```
     pub fn default_auto_bike_walk() -> Self {
+        use default_coefficients::*;
         MultinomialLogit {
             utilities: vec![
                 ModeUtility::new(AgentType::Auto)
-                    .with_asc(0.0)
-                    .with_coeff_time(-0.03)
+                    .with_asc(AUTO_ASC)
+                    .with_coeff_time(AUTO_COEFF_TIME)
                     .build(),
                 ModeUtility::new(AgentType::Bike)
-                    .with_asc(-1.0)
-                    .with_coeff_time(-0.05)
+                    .with_asc(BIKE_ASC)
+                    .with_coeff_time(BIKE_COEFF_TIME)
                     .build(),
                 ModeUtility::new(AgentType::Walk)
-                    .with_asc(-2.0)
-                    .with_coeff_time(-0.08)
+                    .with_asc(WALK_ASC)
+                    .with_coeff_time(WALK_COEFF_TIME)
                     .build(),
             ],
         }
+    }
+
+    /// Create a default logit model for AUTO, BIKE, WALK, TRANSIT.
+    ///
+    /// Uses the typical (illustrative) coefficients from
+    /// [`default_coefficients`]:
+    /// - AUTO: ASC=0, time=-0.03
+    /// - BIKE: ASC=-1.0, time=-0.05
+    /// - WALK: ASC=-2.0, time=-0.08
+    /// - TRANSIT: ASC=-0.5, time=-0.04
+    ///
+    /// Pair it with a transit skim built from
+    /// [`transit_skim`](crate::transit::transit_skim) via
+    /// [`ModeSkim::from_time_map`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::mode_choice::MultinomialLogit;
+    /// use macro_traffic_sim_core::gmns::types::AgentType;
+    ///
+    /// let model = MultinomialLogit::default_auto_bike_walk_transit();
+    /// assert_eq!(model.utilities.len(), 4);
+    /// assert_eq!(model.utilities[3].agent_type, AgentType::Transit);
+    /// ```
+    pub fn default_auto_bike_walk_transit() -> Self {
+        use default_coefficients::*;
+        let mut model = Self::default_auto_bike_walk();
+        model.utilities.push(
+            ModeUtility::new(AgentType::Transit)
+                .with_asc(TRANSIT_ASC)
+                .with_coeff_time(TRANSIT_COEFF_TIME)
+                .build(),
+        );
+        model
     }
 
     /// Split a total OD matrix into per-mode OD matrices.
@@ -291,5 +423,139 @@ impl MultinomialLogit {
         );
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::od::OdMatrix;
+    use crate::transit::{TransitNetwork, TransitRoute, transit_skim};
+
+    const EPS: f64 = 1e-9;
+
+    fn flat_skim(zones: &[i64], time_val: f64) -> ModeSkim {
+        let mut time = DenseOdMatrix::new(zones.to_vec());
+        for &o in zones {
+            for &d in zones {
+                if o != d {
+                    time.set(o, d, time_val);
+                }
+            }
+        }
+        ModeSkim {
+            time,
+            distance: Rc::new(DenseOdMatrix::new(zones.to_vec())),
+            cost: Rc::new(DenseOdMatrix::new(zones.to_vec())),
+        }
+    }
+
+    #[test]
+    fn test_from_time_map_fills_missing_with_infinity() {
+        let zones = vec![1, 2, 3];
+        let map = HashMap::from([((1, 2), 15.0), ((1, 3), 22.0)]);
+        let skim = ModeSkim::from_time_map(
+            &zones,
+            &map,
+            Rc::new(DenseOdMatrix::new(zones.clone())),
+            Rc::new(DenseOdMatrix::new(zones.clone())),
+        );
+        assert!((skim.time.get(1, 2) - 15.0).abs() < EPS);
+        assert!((skim.time.get(1, 3) - 22.0).abs() < EPS);
+        // absent pair -> unavailable
+        assert!(skim.time.get(2, 1).is_infinite());
+        assert!(skim.time.get(3, 2).is_infinite());
+    }
+
+    #[test]
+    fn test_split_gives_transit_zero_share_when_unavailable() {
+        let zones = vec![1, 2];
+        // Transit reachable only 1 -> 2.
+        let transit_map = HashMap::from([((1, 2), 20.0)]);
+        let skims = HashMap::from([
+            (AgentType::Auto, flat_skim(&zones, 20.0)),
+            (AgentType::Bike, flat_skim(&zones, 30.0)),
+            (AgentType::Walk, flat_skim(&zones, 60.0)),
+            (
+                AgentType::Transit,
+                ModeSkim::from_time_map(
+                    &zones,
+                    &transit_map,
+                    Rc::new(DenseOdMatrix::new(zones.clone())),
+                    Rc::new(DenseOdMatrix::new(zones.clone())),
+                ),
+            ),
+        ]);
+
+        let mut total = DenseOdMatrix::new(zones.clone());
+        total.set(1, 2, 100.0);
+        total.set(2, 1, 100.0);
+
+        let model = MultinomialLogit::default_auto_bike_walk_transit();
+        let split = model.split(&total, &skims).unwrap();
+
+        // 1 -> 2: transit is available, gets a positive share.
+        assert!(split[&AgentType::Transit].get(1, 2) > 0.0);
+        // 2 -> 1: transit unavailable, exactly zero; the other three carry all 100.
+        assert!((split[&AgentType::Transit].get(2, 1) - 0.0).abs() < EPS);
+        let carried_21: f64 = [AgentType::Auto, AgentType::Bike, AgentType::Walk]
+            .iter()
+            .map(|m| split[m].get(2, 1))
+            .sum();
+        assert!((carried_21 - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_end_to_end_transit_skim_into_mode_choice() {
+        // A real transit skim feeds the transit alternative.
+        let zones = vec![1, 2];
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+        let transit_map = transit_skim(&network, &zones).unwrap();
+        // 1 -> 2 = 6 wait + 10 ride = 16; 2 -> 1 absent.
+        assert!((transit_map[&(1, 2)] - 16.0).abs() < EPS);
+
+        let skims = HashMap::from([
+            (AgentType::Auto, flat_skim(&zones, 25.0)),
+            (AgentType::Bike, flat_skim(&zones, 40.0)),
+            (AgentType::Walk, flat_skim(&zones, 80.0)),
+            (
+                AgentType::Transit,
+                ModeSkim::from_time_map(
+                    &zones,
+                    &transit_map,
+                    Rc::new(DenseOdMatrix::new(zones.clone())),
+                    Rc::new(DenseOdMatrix::new(zones.clone())),
+                ),
+            ),
+        ]);
+
+        let mut total = DenseOdMatrix::new(zones.clone());
+        total.set(1, 2, 100.0);
+        let split = model_split(&skims, &total);
+
+        // Transit is available on 1 -> 2, so it takes a positive share, and
+        // all four modes together carry the whole 100 trips.
+        let t = split[&AgentType::Transit].get(1, 2);
+        assert!(t > 0.0, "transit share = {}", t);
+        let total_split: f64 = [
+            AgentType::Auto,
+            AgentType::Bike,
+            AgentType::Walk,
+            AgentType::Transit,
+        ]
+        .iter()
+        .map(|m| split[m].get(1, 2))
+        .sum();
+        assert!((total_split - 100.0).abs() < 1e-6);
+    }
+
+    fn model_split(
+        skims: &HashMap<AgentType, ModeSkim>,
+        total: &DenseOdMatrix,
+    ) -> HashMap<AgentType, DenseOdMatrix> {
+        MultinomialLogit::default_auto_bike_walk_transit()
+            .split(total, skims)
+            .unwrap()
     }
 }
