@@ -183,7 +183,13 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                 if seq > 0 {
                     push(
                         &mut graph,
-                        Link::new(&arrival, &stop_name(stop), &route.id, options.alighting_penalty, 0.0),
+                        Link::new(
+                            &arrival,
+                            &stop_name(stop),
+                            &route.id,
+                            options.alighting_penalty,
+                            0.0,
+                        ),
                         LinkMeta {
                             kind: TransitLinkKind::Alighting,
                             route_id: Some(route.id.clone()),
@@ -212,7 +218,13 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                     let next_arrival = arrival_node_name(&route.id, seq + 1);
                     push(
                         &mut graph,
-                        Link::new(&departure, &next_arrival, &route.id, route.segment_times[seq], 0.0),
+                        Link::new(
+                            &departure,
+                            &next_arrival,
+                            &route.id,
+                            route.segment_times[seq],
+                            0.0,
+                        ),
                         LinkMeta {
                             kind: TransitLinkKind::Riding,
                             route_id: Some(route.id.clone()),
@@ -839,12 +851,9 @@ mod tests {
         let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
         od.set(1, 3, 100.0);
 
-        let no_penalty = assign_transit_with_options(
-            &network,
-            &od,
-            &TransitAssignmentOptions::default(),
-        )
-        .unwrap();
+        let no_penalty =
+            assign_transit_with_options(&network, &od, &TransitAssignmentOptions::default())
+                .unwrap();
         // The transfer path is used: line B carries flow on 2 -> 3.
         assert!(no_penalty.route_boardings.get("B").copied().unwrap_or(0.0) > 0.0);
 
@@ -869,7 +878,12 @@ mod tests {
         // the intermediate stop 2 + 10 ride + 0 alighting at destination.
         // With dwell = 4: 2 (half dwell) + 6 + 10 + 4 + 10 = 32.
         let mut network = TransitNetwork::new();
-        network.add_route(TransitRoute::new("L1", vec![1, 2, 3], vec![10.0, 10.0], 6.0));
+        network.add_route(TransitRoute::new(
+            "L1",
+            vec![1, 2, 3],
+            vec![10.0, 10.0],
+            6.0,
+        ));
         let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
         od.set(1, 3, 100.0);
 
