@@ -24,6 +24,8 @@ pub enum TransitError {
     InvalidWaitFactor { wait_factor: f64 },
     /// A boarding or alighting penalty is negative (or NaN).
     InvalidPenalty { name: &'static str, value: f64 },
+    /// Access connector parameters are invalid.
+    InvalidConnectorParams { reason: &'static str },
     /// Two routes share the same id.
     DuplicateRouteId { route_id: String },
     /// An OD zone with demand is not a stop of any route or walk link.
@@ -72,6 +74,9 @@ impl fmt::Display for TransitError {
             }
             TransitError::InvalidPenalty { name, value } => {
                 write!(f, "{} must be non-negative, got {}", name, value)
+            }
+            TransitError::InvalidConnectorParams { reason } => {
+                write!(f, "invalid access connector parameters: {}", reason)
             }
             TransitError::DuplicateRouteId { route_id } => {
                 write!(f, "duplicate route id '{}'", route_id)
