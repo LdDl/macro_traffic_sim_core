@@ -76,6 +76,28 @@ pub struct TransitAssignmentResult {
     pub od_costs: HashMap<(i64, i64), f64>,
     /// Total boardings per route, aggregated over all destinations
     pub route_boardings: HashMap<String, f64>,
+    /// Sum of all boardings over the whole network (every route, every
+    /// destination). Equal to `route_boardings.values().sum()`.
+    pub total_boardings: f64,
+    /// Total assigned demand (sum of the OD entries that were loaded).
+    pub total_demand: f64,
+}
+
+impl TransitAssignmentResult {
+    /// Number of transfers: boardings beyond the first one of each trip.
+    ///
+    /// Computed as `total_boardings - total_demand`. This is exact when
+    /// every assigned trip boards at least once (the usual case). Trips
+    /// that reach their destination on foot without ever boarding make it
+    /// an underestimate, since they add to the demand but not to the
+    /// boardings; the value is clamped at zero.
+    ///
+    /// On the Spiess & Florian (1989) example (1 trip A -> B) it is `0.5`:
+    /// half the flow rides Line 1 directly (one boarding) and half rides
+    /// Line 2 and transfers at Y (two boardings).
+    pub fn transfers(&self) -> f64 {
+        (self.total_boardings - self.total_demand).max(0.0)
+    }
 }
 
 /// Metadata of one expanded link, parallel to the hyperpath link list.
@@ -140,7 +162,11 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
     let wait_of = |headway: f64| options.wait_factor * headway;
     for route in &network.routes {
         let last = route.stops.len() - 1;
-        if options.dwell_time > 0.0 {
+        // Per-route overrides fall back to the global options.
+        let dwell_time = route.dwell_time.unwrap_or(options.dwell_time);
+        let boarding_penalty = route.boarding_penalty.unwrap_or(options.boarding_penalty);
+        let alighting_penalty = route.alighting_penalty.unwrap_or(options.alighting_penalty);
+        if dwell_time > 0.0 {
             // Two-node stop scheme: each stop on the route splits into an
             // arrival node (vehicle arrives, through riders and alighters
             // are here) and a departure node (vehicle departs, boarders
@@ -148,7 +174,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
             // pays the full dwell at every intermediate stop; a boarding
             // rider pays half of it (they board during the dwell), so the
             // boarding link carries `boarding_penalty + 0.5 * dwell`.
-            let half_dwell = 0.5 * options.dwell_time;
+            let half_dwell = 0.5 * dwell_time;
             for (seq, &stop) in route.stops.iter().enumerate() {
                 let arrival = arrival_node_name(&route.id, seq);
                 let departure = departure_node_name(&route.id, seq);
@@ -167,7 +193,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                             &stop_name(stop),
                             &departure,
                             &route.id,
-                            options.boarding_penalty + half_dwell,
+                            boarding_penalty + half_dwell,
                             wait_of(route.headway),
                         ),
                         LinkMeta {
@@ -187,7 +213,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                             &arrival,
                             &stop_name(stop),
                             &route.id,
-                            options.alighting_penalty,
+                            alighting_penalty,
                             0.0,
                         ),
                         LinkMeta {
@@ -203,7 +229,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                 if seq > 0 && seq < last {
                     push(
                         &mut graph,
-                        Link::new(&arrival, &departure, &route.id, options.dwell_time, 0.0),
+                        Link::new(&arrival, &departure, &route.id, dwell_time, 0.0),
                         LinkMeta {
                             kind: TransitLinkKind::Dwell,
                             route_id: Some(route.id.clone()),
@@ -259,7 +285,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                             &stop_name(stop),
                             &node,
                             &route.id,
-                            options.boarding_penalty,
+                            boarding_penalty,
                             wait_of(route.headway),
                         ),
                         LinkMeta {
@@ -281,7 +307,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                             &node,
                             &stop_name(stop),
                             &route.id,
-                            options.alighting_penalty,
+                            alighting_penalty,
                             0.0,
                         ),
                         LinkMeta {
@@ -388,6 +414,50 @@ impl Default for TransitAssignmentOptions {
             alighting_penalty: 0.0,
             dwell_time: 0.0,
         }
+    }
+}
+
+impl TransitAssignmentOptions {
+    /// Start from the defaults (`wait_factor = 1.0`, no penalties, no
+    /// dwell). Chain `with_*` methods to override individual fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::transit::TransitAssignmentOptions;
+    ///
+    /// let options = TransitAssignmentOptions::new()
+    ///     .with_wait_factor(0.5)
+    ///     .with_dwell_time(1.0);
+    /// assert_eq!(options.wait_factor, 0.5);
+    /// assert_eq!(options.dwell_time, 1.0);
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the waiting time factor (`alpha`). See [`Self::wait_factor`].
+    pub fn with_wait_factor(mut self, wait_factor: f64) -> Self {
+        self.wait_factor = wait_factor;
+        self
+    }
+
+    /// Set the boarding penalty. See [`Self::boarding_penalty`].
+    pub fn with_boarding_penalty(mut self, boarding_penalty: f64) -> Self {
+        self.boarding_penalty = boarding_penalty;
+        self
+    }
+
+    /// Set the alighting penalty. See [`Self::alighting_penalty`].
+    pub fn with_alighting_penalty(mut self, alighting_penalty: f64) -> Self {
+        self.alighting_penalty = alighting_penalty;
+        self
+    }
+
+    /// Set the dwell time. See [`Self::dwell_time`].
+    pub fn with_dwell_time(mut self, dwell_time: f64) -> Self {
+        self.dwell_time = dwell_time;
+        self
     }
 }
 
@@ -510,6 +580,7 @@ pub fn assign_transit_with_options(
 
     let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
     let mut od_costs: HashMap<(i64, i64), f64> = HashMap::new();
+    let mut total_demand = 0.0;
 
     let zone_ids = od.zone_ids().to_vec();
     for &destination in &zone_ids {
@@ -563,6 +634,9 @@ pub fn assign_transit_with_options(
             }
             od_costs.insert((origin, destination), label);
         }
+        for &(_, demand) in &origins {
+            total_demand += demand;
+        }
 
         for (from_name, to_map) in &result.volumes.links {
             for (to_name, volume) in to_map {
@@ -593,10 +667,14 @@ pub fn assign_transit_with_options(
         });
     }
 
+    let total_boardings = route_boardings.values().sum();
+
     Ok(TransitAssignmentResult {
         link_volumes,
         od_costs,
         route_boardings,
+        total_boardings,
+        total_demand,
     })
 }
 
@@ -868,6 +946,111 @@ mod tests {
         .unwrap();
         assert!((penalized.route_boardings["D"] - 100.0).abs() < EPS);
         assert!(penalized.route_boardings.get("B").copied().unwrap_or(0.0) < EPS);
+    }
+
+    #[test]
+    fn test_options_builder() {
+        let options = TransitAssignmentOptions::new()
+            .with_wait_factor(0.5)
+            .with_boarding_penalty(2.0)
+            .with_alighting_penalty(3.0)
+            .with_dwell_time(1.0);
+        assert_eq!(options.wait_factor, 0.5);
+        assert_eq!(options.boarding_penalty, 2.0);
+        assert_eq!(options.alighting_penalty, 3.0);
+        assert_eq!(options.dwell_time, 1.0);
+        // Untouched fields keep their defaults.
+        assert_eq!(TransitAssignmentOptions::new().with_dwell_time(5.0).wait_factor, 1.0);
+    }
+
+    #[test]
+    fn test_total_boardings_and_transfers() {
+        // Paper network: 1 trip A -> B. Boardings: L1 0.5, L2 0.5, L4 5/12,
+        // L3 1/12 => 1.5 total. Demand 1.0, so transfers = 0.5 (the Line 2
+        // half transfers at Y).
+        let network = paper_network();
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od.set(1, 4, 1.0);
+        let result = assign_transit(&network, &od).unwrap();
+        assert!((result.total_boardings - 1.5).abs() <= EPS);
+        assert!((result.total_demand - 1.0).abs() <= EPS);
+        assert!((result.transfers() - 0.5).abs() <= EPS);
+    }
+
+    #[test]
+    fn test_transfers_zero_for_direct_trip() {
+        // Single line, no transfer possible: every trip boards exactly
+        // once, transfers = 0.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 50.0);
+        let result = assign_transit(&network, &od).unwrap();
+        assert!((result.total_boardings - 50.0).abs() <= EPS);
+        assert!((result.transfers() - 0.0).abs() <= EPS);
+    }
+
+    #[test]
+    fn test_per_route_dwell_override() {
+        // Global dwell 0, but line L1 overrides it to 4. A through rider
+        // 1 -> 3 on L1 pays the override dwell; the result gains a Dwell
+        // link on L1. Same cost as the global-dwell test: 32.
+        let mut network = TransitNetwork::new();
+        network.add_route(
+            TransitRoute::new("L1", vec![1, 2, 3], vec![10.0, 10.0], 6.0).with_dwell_time(4.0),
+        );
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3]);
+        od.set(1, 3, 100.0);
+
+        // Global options leave dwell at 0; only the route override applies.
+        let result = assign_transit(&network, &od).unwrap();
+        assert!((result.od_costs[&(1, 3)] - 32.0).abs() < EPS);
+        assert!(
+            result
+                .link_volumes
+                .iter()
+                .any(|lv| lv.kind == TransitLinkKind::Dwell)
+        );
+    }
+
+    #[test]
+    fn test_per_route_override_falls_back_to_global() {
+        // Two lines share a stop; only line B overrides the boarding
+        // penalty. Line A uses the global boarding penalty (5), line B its
+        // own (0). Verified through the expected travel times of two
+        // separate single-line trips.
+        let mut network = TransitNetwork::new();
+        network.add_route(TransitRoute::new("A", vec![1, 2], vec![10.0], 6.0));
+        network.add_route(
+            TransitRoute::new("B", vec![3, 4], vec![10.0], 6.0).with_boarding_penalty(0.0),
+        );
+        let options = TransitAssignmentOptions::new().with_boarding_penalty(5.0);
+
+        let mut od_a = DenseOdMatrix::new(vec![1, 2]);
+        od_a.set(1, 2, 1.0);
+        let ra = assign_transit_with_options(&network, &od_a, &options).unwrap();
+        // Line A: global penalty 5 + wait 6 + ride 10 = 21.
+        assert!((ra.od_costs[&(1, 2)] - 21.0).abs() < EPS);
+
+        let mut od_b = DenseOdMatrix::new(vec![3, 4]);
+        od_b.set(3, 4, 1.0);
+        let rb = assign_transit_with_options(&network, &od_b, &options).unwrap();
+        // Line B: override penalty 0 + wait 6 + ride 10 = 16.
+        assert!((rb.od_costs[&(3, 4)] - 16.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_per_route_invalid_override() {
+        let mut network = TransitNetwork::new();
+        network.add_route(
+            TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0).with_dwell_time(-1.0),
+        );
+        let mut od = DenseOdMatrix::new(vec![1, 2]);
+        od.set(1, 2, 1.0);
+        assert!(matches!(
+            assign_transit(&network, &od),
+            Err(TransitError::InvalidPenalty { .. })
+        ));
     }
 
     #[test]

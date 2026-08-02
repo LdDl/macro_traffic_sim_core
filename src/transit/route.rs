@@ -33,6 +33,16 @@ pub struct TransitRoute {
     /// Service headway (time between consecutive vehicles). Must be > 0.
     /// Frequency is `1 / headway`.
     pub headway: f64,
+    /// Per-route boarding penalty. When `Some`, overrides the assignment's
+    /// global `boarding_penalty` for this route only. Must be non-negative.
+    pub boarding_penalty: Option<f64>,
+    /// Per-route alighting penalty. When `Some`, overrides the global
+    /// `alighting_penalty` for this route only. Must be non-negative.
+    pub alighting_penalty: Option<f64>,
+    /// Per-route dwell time. When `Some`, overrides the global `dwell_time`
+    /// for this route only (a positive value activates the two-node stop
+    /// scheme for this route). Must be non-negative.
+    pub dwell_time: Option<f64>,
 }
 
 impl TransitRoute {
@@ -61,7 +71,40 @@ impl TransitRoute {
             stops,
             segment_times,
             headway,
+            boarding_penalty: None,
+            alighting_penalty: None,
+            dwell_time: None,
         }
+    }
+
+    /// Override the boarding penalty for this route.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::transit::TransitRoute;
+    ///
+    /// // an express line with a higher perceived boarding cost
+    /// let route = TransitRoute::new("EXP", vec![1, 2], vec![10.0], 12.0)
+    ///     .with_boarding_penalty(5.0);
+    /// assert_eq!(route.boarding_penalty, Some(5.0));
+    /// ```
+    pub fn with_boarding_penalty(mut self, penalty: f64) -> Self {
+        self.boarding_penalty = Some(penalty);
+        self
+    }
+
+    /// Override the alighting penalty for this route.
+    pub fn with_alighting_penalty(mut self, penalty: f64) -> Self {
+        self.alighting_penalty = Some(penalty);
+        self
+    }
+
+    /// Override the dwell time for this route. A positive value activates
+    /// the two-node stop scheme for this route only.
+    pub fn with_dwell_time(mut self, dwell: f64) -> Self {
+        self.dwell_time = Some(dwell);
+        self
     }
 }
 
@@ -216,6 +259,17 @@ impl TransitNetwork {
                 return Err(TransitError::NonPositiveHeadway {
                     route_id: route.id.clone(),
                 });
+            }
+            for (name, value) in [
+                ("boarding_penalty", route.boarding_penalty),
+                ("alighting_penalty", route.alighting_penalty),
+                ("dwell_time", route.dwell_time),
+            ] {
+                if let Some(value) = value
+                    && (value.is_nan() || value < 0.0)
+                {
+                    return Err(TransitError::InvalidPenalty { name, value });
+                }
             }
         }
         Ok(())

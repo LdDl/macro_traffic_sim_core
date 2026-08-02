@@ -111,6 +111,11 @@ fn main() {
     for (route_id, volume) in boardings {
         println!("  {}: {:.4}", route_id, volume);
     }
+    println!(
+        "  total boardings: {:.4}, transfers: {:.4}",
+        result.total_boardings,
+        result.transfers()
+    );
 
     // Waiting time factor: the paper uses alpha = 1 (exponential arrivals,
     // wait = full headway). A common practical choice is alpha = 0.5
@@ -119,10 +124,7 @@ fn main() {
     let half_wait = assign_transit_with_options(
         &network,
         &od,
-        &TransitAssignmentOptions {
-            wait_factor: 0.5,
-            ..Default::default()
-        },
+        &TransitAssignmentOptions::new().with_wait_factor(0.5),
     )
     .expect("transit assignment failed");
     println!("\nWith wait_factor = 0.5 (half-headway waiting):");
@@ -139,10 +141,7 @@ fn main() {
     let with_dwell = assign_transit_with_options(
         &network,
         &od,
-        &TransitAssignmentOptions {
-            dwell_time: 1.0,
-            ..Default::default()
-        },
+        &TransitAssignmentOptions::new().with_dwell_time(1.0),
     )
     .expect("transit assignment failed");
     println!("\nWith dwell_time = 1.0 min per stop (two-node scheme):");
