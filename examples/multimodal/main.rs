@@ -89,8 +89,13 @@ fn main() {
     // Trip distribution: exponential impedance f(t) = exp(-0.1 * t)
     let impedance = ExponentialImpedance::new(0.1);
 
-    // Mode choice: multinomial logit (auto/bike/walk)
-    let logit = MultinomialLogit::default_auto_bike_walk();
+    // Mode choice: multinomial logit with a transit alternative
+    // (auto/bike/walk/transit). Transit demand is derived here, not fed by
+    // hand, from the transit skim computed over the transit network below.
+    let logit = MultinomialLogit::default_auto_bike_walk_transit();
+
+    // Transit layer, built before the pipeline so mode choice can skim it.
+    let transit_network = build_transit_network();
 
     // Config: Frank-Wolfe with store_paths, multi-class, 3 feedback iterations
     let class_names = ["car", "truck"];
@@ -108,7 +113,17 @@ fn main() {
         .build();
 
     let result = run_four_step_model(
-        &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
+        &network,
+        &zones,
+        &trip_gen,
+        &impedance,
+        &logit,
+        &config,
+        Some(TransitInput {
+            network: &transit_network,
+            options: TransitAssignmentOptions::default(),
+        }),
+        None,
     )
     .expect("pipeline failed");
 
@@ -124,7 +139,12 @@ fn main() {
     }
 
     // Mode split totals
-    for mode in &[AgentType::Auto, AgentType::Bike, AgentType::Walk] {
+    for mode in &[
+        AgentType::Auto,
+        AgentType::Bike,
+        AgentType::Walk,
+        AgentType::Transit,
+    ] {
         if let Some(od) = result.mode_od.get(mode) {
             info!(
                 event = "mode_split",
@@ -318,21 +338,23 @@ fn main() {
         "Select link total",
     );
 
-    // Public transit: optimal strategies assignment over the transit
-    // layer (times in minutes). Demand is an exogenous OD between zone
-    // centroids acting as pseudo-stops.
-    let transit_network = build_transit_network();
-    let transit_od = build_transit_od();
+    // Public transit results: the transit share from mode choice was
+    // assigned inside the pipeline with the optimal strategies algorithm.
+    let transit = match &result.transit {
+        Some(t) => t,
+        None => {
+            info!(event = "transit", "No transit demand assigned");
+            return;
+        }
+    };
 
     info!(
-        event = "transit_network",
-        routes = transit_network.routes.len(),
-        walk_links = transit_network.walk_links.len(),
-        demand = format!("{:.0}", transit_od.total()),
-        "Transit network ready",
+        event = "transit_summary",
+        demand = format!("{:.1}", transit.total_demand),
+        boardings = format!("{:.1}", transit.total_boardings),
+        transfers = format!("{:.1}", transit.transfers()),
+        "Transit assignment complete",
     );
-
-    let transit = assign_transit(&transit_network, &transit_od).expect("transit assignment failed");
 
     // Expected travel times per OD pair (waiting + in-vehicle + walking)
     let mut od_costs: Vec<(&(i64, i64), &f64)> = transit.od_costs.iter().collect();
@@ -347,13 +369,13 @@ fn main() {
         );
     }
 
-    // Access stop choice: walking volumes leaving the centroids show
-    // which stop each zone uses, per destination mix
+    // Access stop choice: walking volumes leaving the zone centroids (IDs
+    // 1-4) show which stop each zone uses, per destination mix
     for lv in &transit.link_volumes {
-        if lv.kind == TransitLinkKind::Walking && lv.volume > 0.0 && lv.from_stop >= 900 {
+        if lv.kind == TransitLinkKind::Walking && lv.volume > 0.0 && lv.from_stop <= 4 {
             info!(
                 event = "transit_access",
-                centroid = lv.from_stop,
+                zone = lv.from_stop,
                 stop = lv.to_stop,
                 passengers = format!("{:.1}", lv.volume),
                 "Access walk",
@@ -565,9 +587,9 @@ fn build_zones() -> Vec<Zone> {
 /// Spiess & Florian. Western side: tram T1 (z1 - z3 - z4). Each line
 /// has a reverse twin (suffix "r") because `TransitRoute` is one-way.
 ///
-/// Zone centroids (9xx) join as pseudo-stops via walk links; zones 1
-/// and 4 reach both sides of the network, so the access stop is chosen
-/// by the algorithm per destination, not hardwired.
+/// Zone centroids (the zone IDs 1-4) join as pseudo-stops via walk links;
+/// zones 1 and 4 reach both sides of the network, so the access stop is
+/// chosen by the algorithm per destination, not hardwired.
 fn build_transit_network() -> TransitNetwork {
     let mut net = TransitNetwork::new();
 
@@ -611,15 +633,15 @@ fn build_transit_network() -> TransitNetwork {
         8.0,
     ));
 
-    // Zone access: centroid <-> stop walk links, both directions.
+    // Zone access: zone centroid <-> stop walk links, both directions.
     // Zones 1 and 4 have a choice between the bus and the tram side.
     let walks = [
-        (CENTROID_Z1, STOP_Z1_EAST, 3.0),
-        (CENTROID_Z1, STOP_Z1_WEST, 4.0),
-        (CENTROID_Z2, STOP_Z2, 2.0),
-        (CENTROID_Z3, STOP_Z3, 2.0),
-        (CENTROID_Z4, STOP_Z4_EAST, 2.0),
-        (CENTROID_Z4, STOP_Z4_WEST, 3.0),
+        (ZONE_1, STOP_Z1_EAST, 3.0),
+        (ZONE_1, STOP_Z1_WEST, 4.0),
+        (ZONE_2, STOP_Z2, 2.0),
+        (ZONE_3, STOP_Z3, 2.0),
+        (ZONE_4, STOP_Z4_EAST, 2.0),
+        (ZONE_4, STOP_Z4_WEST, 3.0),
     ];
     for &(centroid, stop, minutes) in &walks {
         net.add_walk_link(centroid, stop, minutes);
@@ -627,19 +649,4 @@ fn build_transit_network() -> TransitNetwork {
     }
 
     net
-}
-
-/// External (exogenous if to be correct) transit demand between zone centroids (passengers/hour).
-///
-/// Independent from the road OD produced by the 4-step pipeline: mode
-/// choice with a transit alternative is future work, here the transit
-/// riders are given directly.
-fn build_transit_od() -> DenseOdMatrix {
-    let mut od = DenseOdMatrix::new(vec![CENTROID_Z1, CENTROID_Z2, CENTROID_Z3, CENTROID_Z4]);
-    od.set(CENTROID_Z1, CENTROID_Z4, 600.0);
-    od.set(CENTROID_Z4, CENTROID_Z1, 400.0);
-    od.set(CENTROID_Z1, CENTROID_Z3, 300.0);
-    od.set(CENTROID_Z2, CENTROID_Z4, 200.0);
-    od.set(CENTROID_Z3, CENTROID_Z1, 150.0);
-    od
 }

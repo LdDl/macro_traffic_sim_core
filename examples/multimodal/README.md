@@ -1,15 +1,15 @@
 # multimodal
 
-A multimodal city in memory: personal cars and public transit on one GMNS network. No external files needed.
+A multimodal city in memory: personal cars and public transit sharing one 4-step run on one GMNS network. No external files needed.
 
-The road side is identical to [`path_analysis_multi_class`](../path_analysis_multi_class/README.md): full 4-step pipeline, two user classes (car + truck), `store_paths`, OD path query and select link analysis. On top of it this example adds a public transit layer:
+The road side is [`path_analysis_multi_class`](../path_analysis_multi_class/README.md): full 4-step pipeline, two user classes (car + truck), `store_paths`, OD path query and select link analysis. On top of it this example adds a public transit layer and, crucially, lets `mode choice` step decide how much demand goes to transit:
 
 - six stops as GMNS `location` records pinned to the road links (the road graph itself is never modified);
 - two bus lines and a tram line, each with a reverse twin;
-- zone centroids as transit pseudo-stops connected to nearby stops by walk links - the assignment itself picks the access stop per destination;
-- an exogenous transit OD assigned with the optimal strategies algorithm (Spiess & Florian, 1989) by the [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs) crate.
+- zone centroids (the zone IDs themselves) connected to nearby stops by walk links - the assignment itself picks the access stop per destination;
+- transit as a **fourth mode-choice alternative** (auto/bike/walk/transit): the logit splits the total demand using a transit skim, and the resulting transit share is assigned with the optimal strategies algorithm (Spiess & Florian, 1989) by the [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs) crate.
 
-Road demand comes from the 4-step pipeline; transit demand is a separate table (mode choice with a transit alternative is future work).
+Both the road and transit demand come from the one 4-step run; mode choice is where they part. (For a manually supplied transit OD assigned on its own, see the [`transit`](../transit/README.md) and [`transit_gtfs`](../transit_gtfs/README.md) examples.)
 
 ## Run
 
@@ -104,10 +104,10 @@ Each line has a reverse twin (`B1r`, `B2r`, `T1r`) with the same times, because 
 
 ### Zone access
 
-Zone centroids (901-904) join the transit graph as pseudo-stops via walk links (both directions, minutes). Zones 1 and 4 reach both sides of the network:
+The zone centroid is the zone ID itself (1-4). Using the road zone IDs as transit centroids is what lets a single OD matrix split across road and transit modes - a trip to zone 4 is a trip to zone 4 whether it drives or rides. Each centroid connects to its candidate stops by walk links (both directions, minutes); zones 1 and 4 reach both sides of the network:
 
 ```text
-                  (901) zone 1
+                   (1) zone 1
                  /            \
             walk 4.0        walk 3.0
                /                \
@@ -115,7 +115,7 @@ Zone centroids (901-904) join the transit graph as pseudo-stops via walk links (
              |                   |                    \
            T1: 5               B1: 6                   \
              |                   |                      |
-           [823] -2.0- (903)   [812] -2.0- (902)        |
+           [823] -2.0- (3)     [812] -2.0- (2)          |
              |                   |                      |
            T1: 5               B1: 7                    |
              |                   |                      /
@@ -123,99 +123,113 @@ Zone centroids (901-904) join the transit graph as pseudo-stops via walk links (
                \                /
             walk 3.0        walk 2.0
                  \            /
-                  (904) zone 4
+                   (4) zone 4
 ```
 
 There is no "assign the zone to its nearest stop" step: the centroid is connected to several candidate stops and phase 1 of the algorithm decides which of them is actually used, separately for every destination.
 
-### Transit demand (passengers/hour)
+## How transit joins the 4-step pipeline
 
-| From | To | Trips |
-|------|----|-------|
-| 901 (zone 1) | 904 (zone 4) | 600 |
-| 904 (zone 4) | 901 (zone 1) | 400 |
-| 901 (zone 1) | 903 (zone 3) | 300 |
-| 902 (zone 2) | 904 (zone 4) | 200 |
-| 903 (zone 3) | 901 (zone 1) | 150 |
+`run_four_step_model` takes an optional `TransitInput { network, options }`. When present:
 
-Total: 1650 trips.
+1. Transit skim:
+Before the feedback loop, the pipeline runs the optimal strategies label-setting once per destination zone over the transit network, producing a zone-to-zone expected travel time matrix. These labels are flow-independent, so the skim is computed once and reused.
+2. Mode choice with four alternatives:
+The logit ([`default_auto_bike_walk_transit`](../../src/mode_choice/logit.rs)) splits the total OD into auto/bike/walk/transit, the transit utility fed by the skim. Pairs with no transit path get zero transit share.
+3. Assignment:
+The auto share is loaded on the road network (split further into car/truck), and the final transit share is assigned with optimal strategies. Both results come back in one `PipelineResult`.
 
-## The transit algorithm, step by step
+The mode split for this city:
 
-`assign_transit` expands every line into boarding links (stop -> route node, frequency = 1/headway), riding links (route node -> route node) and alighting links (route node -> stop, instant), adds the walk links, then runs the two phases of the algorithm per destination. See the [`transit`](../transit/README.md) example for the paper's own network traced against Tables 2 and 3; here is the trace for destination 904 (zone 4), the richest one.
+| Mode | Trips | Share |
+|------|-------|-------|
+| Auto | 4751 | 61% |
+| Bike | 1491 | 19% |
+| Transit | 1292 | 17% |
+| Walk | 266 | 3% |
 
-Phase 1 (backward from 904, only the meaningful acceptances):
+Transit is now endogenous: change a headway or a walk time and the transit skim shifts, mode choice reacts, and both the transit and the road loads move.
+
+## The transit skim, step by step
+
+The skim is the phase-1 label of the optimal strategy: the expected travel time from every zone to a destination, computed with no demand. Here is the trace to destination zone 4, the richest one (the same construction the [`transit`](../transit/README.md) example traces against the paper's Table 2, only over this network):
 
 | # | Event | Update | Interpretation |
 |---|-------|--------|----------------|
-| 1 | walk 814 -> 904 (2.0, no wait) | `u_814 = 2` | leaving from 814, you walk home |
-| 2 | walk 824 -> 904 (3.0, no wait) | `u_824 = 3` | same for the tram side |
+| 1 | walk 814 -> 4 (2.0, no wait) | `u_814 = 2` | leaving from 814, you walk into zone 4 |
+| 2 | walk 824 -> 4 (3.0, no wait) | `u_824 = 3` | same on the tram side |
 | 3 | riding/alighting chains | `u(B1@812) = 7 + 2 = 9`, `u(B2@811) = 11 + 2 = 13`, `u(B1@811) = 6 + 9 = 15`, `u(T1@823) = 5 + 3 = 8`, `u(T1@821) = 5 + 8 = 13` | on-board times propagate through the route nodes |
-| 4 | board B1 at 812 (f = 1/6) | `u_812 = 6 + 9 = 15` | zone 2 passengers wait for B1 only |
-| 5 | board B2 at 811 (f = 1/12, key 13) | `u_811 = 12 + 13 = 25` | express alone: long headway dominates |
-| 6 | board B1 at 811 (f = 1/6, key 15) | `u_811 = (25/12 + 15/6) / (1/4) = 18.33` | B1 joins the basket: waiting for either of the two beats committing to the express, even though the express rides faster |
+| 4 | board B1 at 812 (f = 1/6) | `u_812 = 6 + 9 = 15` | zone 2 waits for B1 only |
+| 5 | board B2 at 811 (f = 1/12, key 13) | `u_811 = 12 + 13 = 25` | express alone: the long headway dominates |
+| 6 | board B1 at 811 (f = 1/6, key 15) | `u_811 = (25/12 + 15/6) / (1/4) = 18.33` | B1 joins the basket: waiting for either bus beats committing to the express |
 | 7 | board T1 at 823 (f = 1/8) | `u_823 = 8 + 8 = 16` | |
 | 8 | board T1 at 821 (f = 1/8, key 13) | `u_821 = 8 + 13 = 21` | |
-| 9 | walk 901 -> 811 (3.0, key 18.33 + 3) | `u_901 = 21.33` | zone 1 goes to the bus stop... |
-| 10 | walk 901 -> 821 (4.0, key 21 + 4 = 25) | rejected: `21.33 < 25` | ...and the tram access is examined and rejected - this is the per-destination access choice |
+| 9 | walk 1 -> 811 (3.0, key 18.33 + 3) | `u_1 = 21.33` | zone 1 reaches zone 4 via the bus stop... |
+| 10 | walk 1 -> 821 (4.0, key 21 + 4 = 25) | rejected: `21.33 < 25` | ...and the tram access is rejected - the per-destination access choice |
 
-Boarding links of the reverse lines (B1r, B2r, T1r) are also examined for this destination and rejected: riding away from 904 cannot improve any label. Their keys equal the current stop labels exactly (boarding costs 0, and the reverse route node gets its label through its own 0-cost alighting link), which is why the solver accepts a link only on strict improvement - accepting at equality would create a zero-cost board-alight cycle and phase 2 would strand flow in it. See the acceptance test discussion in [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs).
+So `skim[(1, 4)] = 21.33`. The full skim (minutes), which the logit consumes as the transit alternative's travel time:
 
-Phase 2 (loading, reverse acceptance order), demand 600 from 901 and 200 from 902:
+| From \ To | 1 | 2 | 3 | 4 |
+|-----------|-----|-----|-----|-----|
+| **1** | - | 17.00 | 19.00 | 21.33 |
+| **2** | 17.00 | - | 32.50 | 17.00 |
+| **3** | 19.00 | 31.50 | - | 18.00 |
+| **4** | 21.33 | 17.00 | 18.00 | - |
 
-1. Walk 901 -> 811 carries all 600: the strategy uses only the bus access for this destination.
-2. At 811 the volume splits proportionally to frequencies: B1 gets `(1/6)/(1/4) * 600 = 400`, B2 gets `(1/12)/(1/4) * 600 = 200`.
-3. Walk 902 -> 812 brings 200, they board B1 (the only attractive line at 812).
-4. B1 rides 812 -> 814 with `400 + 200 = 600` on board; B2 arrives with 200; both alight at 814 and 800 walk into zone 4. Everything that left arrived: flow is conserved.
-
-For destination 903 the picture flips: the east side has no path to zone 3 at all, so `u_901 = 4 + 15 = 19` via the tram (4 walk + 8 wait + 5 ride + 2 walk) and the 300 zone 1 -> zone 3 passengers use the *other* access stop. Same origin, different destinations, different access stops - no nearest-stop heuristic could produce this.
+The expensive `2 -> 3` (32.50) is a bus-to-tram transfer through the zone-1 centroid used as a walking interchange (812 -> bus -> 811 -> walk to zone 1 -> walk to 821 -> tram -> 823); there is no direct east-west line.
 
 ## Transit results
 
-Expected travel times (walk + wait + ride):
+Total transit demand from mode choice: **1291.7** trips; **1488.4** boardings; **196.7** transfers (boardings beyond the first of a trip, i.e. line-to-line changes; so about 15% of transit trips board a second line - a bus-to-tram or bus-to-bus interchange - instead of riding one line end to end).
 
-| OD | Minutes | Breakdown |
-|----|---------|-----------|
-| 901 -> 904 | 21.33 | 3 walk + 18.33 (B1/B2 basket at 811) |
-| 904 -> 901 | 21.33 | 2 walk + 19.33 (B1r/B2r basket at 814) |
-| 901 -> 903 | 19.00 | 4 walk + 8 wait + 5 ride + 2 walk |
-| 903 -> 901 | 19.00 | mirror of the above |
-| 902 -> 904 | 17.00 | 2 walk + 6 wait + 7 ride + 2 walk |
+Access walk volumes leaving the zone centroids - the per-destination access choice made visible:
 
-Riding volumes:
+| Zone | -> stop | Passengers |
+|------|---------|------------|
+| 1 | 811 (bus) | 388.2 |
+| 1 | 821 (tram) | 250.0 |
+| 2 | 812 (bus) | 343.2 |
+| 3 | 823 (tram) | 192.6 |
+| 4 | 814 (bus) | 171.6 |
+| 4 | 824 (tram) | 142.7 |
+
+Zone 1 splits across **BOTH** access stops - the bus stop 811 for its eastern/bus destinations, the tram stop 821 for zone 3 - because the algorithm chose the access stop per destination. No nearest-stop rule produces this.
+
+Riding volumes per segment:
 
 | Line | Segment | Passengers |
 |------|---------|------------|
-| B1 | 811 -> 812 | 400.0 |
-| B1 | 812 -> 814 | 600.0 |
-| B2 | 811 -> 814 | 200.0 |
-| B1r | 814 -> 812 -> 811 | 266.7 |
-| B2r | 814 -> 811 | 133.3 |
-| T1 | 821 -> 823 | 300.0 |
-| T1r | 823 -> 821 | 150.0 |
+| B1 | 811 -> 812 | 348.0 |
+| B1 | 812 -> 814 | 269.9 |
+| B1r | 814 -> 812 | 159.4 |
+| B1r | 812 -> 811 | 178.3 |
+| B2 | 811 -> 814 | 40.2 |
+| B2r | 814 -> 811 | 12.3 |
+| T1 | 821 -> 823 | 250.0 |
+| T1 | 823 -> 824 | 106.5 |
+| T1r | 824 -> 823 | 142.7 |
+| T1r | 823 -> 821 | 86.1 |
 
-Observations:
+At 811 the zone 1 -> zone 4 riders still split between B1 and B2 in the 2:1 ratio of their frequencies (1/6 vs 1/12), but the express B2 carries little overall because most of its would-be riders are better served by the frequent B1 basket.
 
-- **Frequency split.** 600 zone 1 -> zone 4 passengers split 400/200 between B1 and B2 - exactly the 2:1 ratio of their frequencies (1/6 vs 1/12). Same at 814 in the reverse direction: 266.7/133.3.
-- **Access choice per destination.** Zone 1 sends 600 passengers to the bus stop (811) and 300 to the tram stop (821), because their destinations differ.
-- **Conservation.** Arrivals: 800 into zone 4, 550 into zone 1, matching the demand column sums.
+## Road results
 
-## Road results (unchanged from path_analysis_multi_class)
-
-The transit layer does not touch the road assignment - all numbers below match [`path_analysis_multi_class`](../path_analysis_multi_class/README.md), where they are derived step by step.
+Adding transit as a mode takes ~17% of demand off the road, so the road loads are **LOWER** than in [`path_analysis_multi_class`](../path_analysis_multi_class/README.md) (which had no transit):
 
 | Step | Result |
 |------|--------|
-| Trip generation | P=[3050, 2250, 1300, 1200], A=[1000, 2400, 2600, 1800] |
+| Trip generation | P=[3050, 2250, 1300, 1200], A=[1000, 2400, 2600, 1800] (unchanged, generation ignores modes) |
 | Trip distribution | 7800 total trips, Furness converges in 5 iterations |
-| Mode choice | Auto: 5692 (73%), Bike: 1787 (23%), Walk: 320 (4%) |
-| Assignment | multi-class FW, 4 iterations cold start, PCU total 8795 |
-| Path analysis | 24 paths (12 OD pairs x 2 classes), car/truck flows 9:1 |
-| Select link 102 | 6 OD-class pairs, 2103.2 PCU through the link |
+| Mode choice | Auto 4751, Bike 1491, Transit 1292, Walk 266 |
+| Assignment | multi-class FW, car 5800.5 + truck 644.5, PCU total 7411.7 (was 8795 without transit) |
+| Path analysis | 24 paths (12 OD pairs x 2 classes); 1 -> 4 now routes [100, 104] via zone 2 |
+| Select link 102 | 2 OD-class pairs, 653.0 PCU (was 6 pairs / 2103.2) |
+
+The lighter auto loading even changes the equilibrium route for zone 1 -> zone 4 (via zone 2 now, versus via zone 3 in the road-only example): mode choice and assignment are coupled.
 
 ## Difference from path_analysis_multi_class
 
-Three additions, all in `main.rs`:
+The road pipeline is byte-for-byte the same. The multimodal additions, all in `main.rs`:
 
 ```rust
 // 1. Stops pinned to road links inside build_network()
@@ -225,27 +239,26 @@ net.add_location(
         .build(),
 )?;
 
-// 2. The transit layer over the stop locations
+// 2. A transit layer over the stop locations, with zone IDs as centroids
 let mut net = TransitNetwork::new();
-net.add_route(TransitRoute::new(
-    "B1",
-    vec![STOP_Z1_EAST, STOP_Z2, STOP_Z4_EAST],
-    vec![6.0, 7.0],
-    6.0,
-));
-// ... 5 more routes, then centroid access:
-net.add_walk_link(CENTROID_Z1, STOP_Z1_EAST, 3.0);
+net.add_route(TransitRoute::new("B1", vec![811, 812, 814], vec![6.0, 7.0], 6.0));
+// ... more routes, then zone access:
+net.add_walk_link(ZONE_1, STOP_Z1_EAST, 3.0);
 
-// 3. Assignment over the centroid OD
-let transit = assign_transit(&transit_network, &transit_od)?;
+// 3. Transit as a mode-choice alternative, assigned inside the pipeline
+let logit = MultinomialLogit::default_auto_bike_walk_transit();
+let result = run_four_step_model(
+    &network, &zones, &trip_gen, &impedance, &logit, &config,
+    Some(TransitInput { network: &transit_network, options: Default::default() }),
+    None,
+)?;
+let transit = result.transit.unwrap();
 ```
-
-The road pipeline is byte-for-byte the same; the two assignments share only the `location` records that pin the stops to the links.
 
 ## References
 
 - Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment model for transit networks". Transportation Research Part B 23(2), 83-102. DOI: [10.1016/0191-2615(89)90034-9](https://doi.org/10.1016/0191-2615(89)90034-9)
 - GMNS `location` table: https://github.com/zephyr-data-specs/GMNS/blob/develop/docs/spec/location.md
-- [`transit`](../transit/README.md) - the paper's network traced against its Tables 2 and 3
+- [`transit`](../transit/README.md) - the paper's network traced against its Tables 2 and 3, standalone assignment with a manual OD
 - [`transit_gtfs`](../transit_gtfs/README.md) - the same chain driven by a GTFS dataset
 - [`path_analysis_multi_class`](../path_analysis_multi_class/README.md) - the road side of this example, explained in full
