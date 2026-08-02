@@ -77,7 +77,6 @@ use crate::verbose::EVENT_MODE_CHOICE;
 
 use super::utility::ModeUtility;
 
-
 /// Typical (illustrative, not calibrated) mode-choice coefficients used by
 /// the `default_*` constructors. Real applications must calibrate their own
 /// against observed mode shares; these are placeholders for examples and
@@ -107,7 +106,6 @@ pub mod default_coefficients {
     /// TRANSIT time coefficient (per minute).
     pub const TRANSIT_COEFF_TIME: f64 = -0.04;
 }
-
 
 /// Skim data for a single mode: time, distance, and cost matrices.
 ///

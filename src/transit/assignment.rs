@@ -324,13 +324,7 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
                 if seq > 0 {
                     push(
                         &mut graph,
-                        Link::new(
-                            &node,
-                            &stop_name(stop),
-                            &route.id,
-                            alighting_penalty,
-                            0.0,
-                        ),
+                        Link::new(&node, &stop_name(stop), &route.id, alighting_penalty, 0.0),
                         LinkMeta {
                             kind: TransitLinkKind::Alighting,
                             route_id: Some(route.id.clone()),
@@ -1087,7 +1081,12 @@ mod tests {
         assert_eq!(options.alighting_penalty, 3.0);
         assert_eq!(options.dwell_time, 1.0);
         // Untouched fields keep their defaults.
-        assert_eq!(TransitAssignmentOptions::new().with_dwell_time(5.0).wait_factor, 1.0);
+        assert_eq!(
+            TransitAssignmentOptions::new()
+                .with_dwell_time(5.0)
+                .wait_factor,
+            1.0
+        );
     }
 
     #[test]
@@ -1169,9 +1168,8 @@ mod tests {
     #[test]
     fn test_per_route_invalid_override() {
         let mut network = TransitNetwork::new();
-        network.add_route(
-            TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0).with_dwell_time(-1.0),
-        );
+        network
+            .add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0).with_dwell_time(-1.0));
         let mut od = DenseOdMatrix::new(vec![1, 2]);
         od.set(1, 2, 1.0);
         assert!(matches!(

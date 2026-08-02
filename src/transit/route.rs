@@ -254,7 +254,8 @@ impl TransitNetwork {
         stops: &[(i64, f64, f64)],
         params: &crate::transit::connectors::AccessConnectorParams,
     ) -> Result<usize, TransitError> {
-        let links = crate::transit::connectors::generate_access_connectors(centroids, stops, params)?;
+        let links =
+            crate::transit::connectors::generate_access_connectors(centroids, stops, params)?;
         let added = links.len();
         self.walk_links.extend(links);
         Ok(added)
