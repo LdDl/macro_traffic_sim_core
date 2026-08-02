@@ -258,6 +258,20 @@ impl Network {
             .collect()
     }
 
+    /// Returns `(id, latitude, longitude)` for every location.
+    ///
+    /// A convenience for feeding transit stops to
+    /// [`generate_access_connectors`](crate::transit::generate_access_connectors):
+    /// the connector generator works on coordinates, and locations carry
+    /// theirs (set with `Location::with_coordinates`). The order is
+    /// unspecified.
+    pub fn location_coords(&self) -> Vec<(i64, f64, f64)> {
+        self.locations
+            .values()
+            .map(|loc| (loc.id, loc.latitude, loc.longitude))
+            .collect()
+    }
+
     /// Get a node by ID.
     pub fn get_node(&self, id: NodeID) -> Result<&Node, SimError> {
         self.nodes

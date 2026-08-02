@@ -39,6 +39,13 @@
 //! plus the expected remaining journey - so connect all candidates within
 //! walking range rather than only the nearest one.
 //!
+//! These walk links can be built by hand or generated from coordinates
+//! with [`generate_access_connectors`] (or the
+//! [`TransitNetwork::add_access_connectors`] convenience): each centroid is
+//! connected to its nearest candidate stops within a search radius, both
+//! directions, with walking times derived from a walking speed. This is
+//! generation from coordinates, not map matching.
+//!
 //! ## Example
 //!
 //! ```
@@ -69,6 +76,7 @@
 //! Solver: [`hyperpaths-rs`](https://crates.io/crates/hyperpaths-rs)
 
 pub mod assignment;
+pub mod connectors;
 pub mod error;
 pub mod from_gtfs;
 pub mod route;
@@ -77,6 +85,7 @@ pub use self::assignment::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
     assign_transit, assign_transit_with_options,
 };
+pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
 pub use self::error::TransitError;
 pub use self::from_gtfs::transit_network_from_gtfs;
 pub use self::route::{TransitNetwork, TransitRoute, WalkLink};

@@ -210,6 +210,56 @@ impl TransitNetwork {
         });
     }
 
+    /// Generates and adds zone access walk links from coordinates.
+    ///
+    /// Convenience wrapper over
+    /// [`generate_access_connectors`](crate::transit::generate_access_connectors):
+    /// it connects each centroid to its nearest candidate stops (both
+    /// directions) and appends the links to this network. Returns the
+    /// number of links added.
+    ///
+    /// # Arguments
+    ///
+    /// * `centroids` - `(id, lat, lon)` of the zone centroids
+    /// * `stops` - `(id, lat, lon)` of the transit stops
+    /// * `params` - Walking speed, search radius, and candidate count
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitError`] when the connector parameters are invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::transit::{
+    ///     AccessConnectorParams, TransitNetwork, TransitRoute,
+    /// };
+    ///
+    /// let mut network = TransitNetwork::new();
+    /// network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+    ///
+    /// let centroids = [(900, 55.7500, 37.6200)];
+    /// let stops = [(1, 55.7500, 37.6222)];
+    /// let params = AccessConnectorParams {
+    ///     walking_speed: 80.0,
+    ///     max_radius_meters: 400.0,
+    ///     max_connectors: 2,
+    /// };
+    /// let added = network.add_access_connectors(&centroids, &stops, &params).unwrap();
+    /// assert_eq!(added, 2); // one pair, both directions
+    /// ```
+    pub fn add_access_connectors(
+        &mut self,
+        centroids: &[(i64, f64, f64)],
+        stops: &[(i64, f64, f64)],
+        params: &crate::transit::connectors::AccessConnectorParams,
+    ) -> Result<usize, TransitError> {
+        let links = crate::transit::connectors::generate_access_connectors(centroids, stops, params)?;
+        let added = links.len();
+        self.walk_links.extend(links);
+        Ok(added)
+    }
+
     /// Validates the network structure.
     ///
     /// Checks that the network is non-empty, every route has at least two
