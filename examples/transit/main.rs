@@ -131,4 +131,24 @@ fn main() {
         half_wait.od_costs[&(1, 4)],
         result.od_costs[&(1, 4)]
     );
+
+    // Dwell time: a positive dwell switches the expansion to a two-node
+    // stop scheme (arrival and departure nodes with a dwell link between).
+    // A through passenger pays the full dwell at each intermediate stop, a
+    // boarding passenger pays half. With alpha = 1 unchanged.
+    let with_dwell = assign_transit_with_options(
+        &network,
+        &od,
+        &TransitAssignmentOptions {
+            dwell_time: 1.0,
+            ..Default::default()
+        },
+    )
+    .expect("transit assignment failed");
+    println!("\nWith dwell_time = 1.0 min per stop (two-node scheme):");
+    println!(
+        "  A -> B expected travel time: {:.2} min (was {:.2})",
+        with_dwell.od_costs[&(1, 4)],
+        result.od_costs[&(1, 4)]
+    );
 }
