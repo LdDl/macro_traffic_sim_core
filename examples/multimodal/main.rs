@@ -6,14 +6,15 @@
 //!
 //! - two bus lines and an in-street tram line, defined over stops that
 //!   are GMNS locations pinned to the road links (the road graph is never modified);
-//! - zone centroids as transit pseudo-stops connected to nearby stops
+//! - zone centroids (the zone IDs themselves) connected to nearby stops
 //!   by walk links - the algorithm itself picks the access stop per destination;
-//! - a transit OD assigned with the Spiess-Florian optimal strategies
-//!   algorithm, next to the car/truck equilibrium assignment.
+//! - transit as a fourth mode-choice alternative: the logit splits the
+//!   total demand into auto/bike/walk/transit from a transit skim, and the
+//!   transit share is assigned with the Spiess-Florian optimal strategies
+//!   algorithm inside the same 4-step pipeline as the car/truck equilibrium.
 //!
-//! Road demand comes from the 4-step pipeline; transit demand is a
-//! separate exogenous table (mode choice with a transit alternative is
-//! future work).
+//! Both the road and transit demand come from the one 4-step run: mode
+//! choice is where they part.
 //!
 //! ```text
 //!                 Zone 1 (residential)
@@ -42,10 +43,10 @@ use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
 use macro_traffic_sim_core::gmns::types::AgentType;
 use macro_traffic_sim_core::mode_choice::MultinomialLogit;
-use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
-use macro_traffic_sim_core::pipeline::{haversine_km, run_four_step_model};
+use macro_traffic_sim_core::od::OdMatrix;
+use macro_traffic_sim_core::pipeline::{TransitInput, haversine_km, run_four_step_model};
 use macro_traffic_sim_core::transit::{
-    TransitLinkKind, TransitNetwork, TransitRoute, assign_transit,
+    TransitAssignmentOptions, TransitLinkKind, TransitNetwork, TransitRoute,
 };
 use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 use macro_traffic_sim_core::trip_generation::RegressionGenerator;
@@ -53,19 +54,20 @@ use macro_traffic_sim_core::verbose::VerboseLevel;
 use macro_traffic_sim_core::zone::Zone;
 use tracing::info;
 
-// Transit stop locations (points on road links, IDs 8xx) and zone
-// centroids acting as transit pseudo-stops (IDs 9xx). Centroids are
-// plain IDs, not locations: a zone is an area, not a point on a link.
+// Transit stop locations: points on road links (IDs 8xx). Zone centroids
+// are the zone IDs themselves (1-4) - a transit trip starts and ends at
+// its zone, walking to a stop from there. Using the zone IDs as centroids
+// is what lets one OD matrix split across road and transit modes.
 const STOP_Z1_EAST: i64 = 811;
 const STOP_Z2: i64 = 812;
 const STOP_Z4_EAST: i64 = 814;
 const STOP_Z1_WEST: i64 = 821;
 const STOP_Z3: i64 = 823;
 const STOP_Z4_WEST: i64 = 824;
-const CENTROID_Z1: i64 = 901;
-const CENTROID_Z2: i64 = 902;
-const CENTROID_Z3: i64 = 903;
-const CENTROID_Z4: i64 = 904;
+const ZONE_1: i64 = 1;
+const ZONE_2: i64 = 2;
+const ZONE_3: i64 = 3;
+const ZONE_4: i64 = 4;
 
 fn main() {
     let network = build_network();
