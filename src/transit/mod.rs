@@ -67,6 +67,29 @@
 //! assert!((result.od_costs[&(1, 4)] - 27.75).abs() < 1e-9);
 //! ```
 //!
+//! ## Concurrency and services (REST / gRPC)
+//!
+//! [`assign_transit`] is single-threaded and holds no shared mutable state,
+//! so it is safe to call from many threads at once. In a service that is the
+//! intended shape: keep each request single-threaded and let the server's
+//! executor (Tokio, a thread pool, ...) provide parallelism across requests.
+//! The cores stay busy with useful work and tail latency stays predictable.
+//!
+//! Do not reach for the opt-in parallel variants
+//! ([`assign_transit_par`], available under the `parallel` feature) inside a
+//! request handler. They fan a single assignment out over rayon's global
+//! thread pool; if every in-flight request does that too, the pools
+//! oversubscribe the cores and p99 latency gets worse, not better. The
+//! parallel variants are for one large batch assignment (a CLI or a one-shot
+//! job) on an otherwise idle process, not for a concurrent server.
+//!
+//! There is a further server-side win that this module does not (yet) expose
+//! as an API: the interned solver graph is immutable and `Sync`, so for a
+//! fixed network where only the OD changes between requests it could be built
+//! once and shared across all requests, removing the per-request route-graph
+//! expansion and interning. Today [`assign_transit`] rebuilds it per call;
+//! caching it across calls is left for a future prepared-network API.
+//!
 //! ## Reference
 //!
 //! Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment
@@ -87,6 +110,8 @@ pub use self::assignment::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
     assign_transit, assign_transit_with_options, transit_skim, transit_skim_with_options,
 };
+#[cfg(feature = "parallel")]
+pub use self::assignment::{assign_transit_par, assign_transit_par_with_options};
 pub use self::assignment::congested::{
     CongestedParams, CongestedResult, assign_transit_congested,
 };

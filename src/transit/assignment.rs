@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hyperpaths_rs::{Graph, Link, find_optimal_strategy};
+use hyperpaths_rs::{Graph, Link, Workspace, find_optimal_strategy};
 
 use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
@@ -577,35 +577,81 @@ pub fn assign_transit_with_options(
     // Intern the expanded route graph once, then assign every destination
     // through a reused workspace instead of re-interning it per destination.
     let arena = Graph::new(&graph.links, &graph.nodes);
-    let mut workspace = arena.new_workspace();
-    let mut demand_col: Vec<f64> = vec![0.0; arena.num_nodes()];
-    let mut origin_ids: Vec<usize> = Vec::new();
-
-    let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
-    let mut od_costs: HashMap<(i64, i64), f64> = HashMap::new();
-    let mut total_demand = 0.0;
-
     let zone_ids = od.zone_ids().to_vec();
+
+    let mut sink = DestSink::new(&arena, graph.links.len());
     for &destination in &zone_ids {
+        sink.assign_destination(&graph, &arena, od, &zone_ids, destination)?;
+    }
+
+    let DestSink {
+        volumes,
+        od_costs,
+        total_demand,
+        ..
+    } = sink;
+    Ok(finalize(&graph, &volumes, od_costs, total_demand))
+}
+
+/// Per-thread scratch and result accumulator for one interned route graph.
+///
+/// Holds the reusable Spiess-Florian workspace (so an interned graph is solved
+/// for many destinations without re-interning) next to the aggregated link
+/// volumes, OD costs and total demand. Used serially in
+/// [`assign_transit_with_options`]; the parallel path keeps one per rayon
+/// worker and combines them with [`DestSink::merge`].
+struct DestSink<'g> {
+    workspace: Workspace<'g>,
+    demand_col: Vec<f64>,
+    origins: Vec<(i64, f64)>,
+    origin_ids: Vec<usize>,
+    volumes: Vec<f64>,
+    od_costs: HashMap<(i64, i64), f64>,
+    total_demand: f64,
+}
+
+impl<'g> DestSink<'g> {
+    fn new(arena: &'g Graph, num_links: usize) -> Self {
+        DestSink {
+            workspace: arena.new_workspace(),
+            demand_col: vec![0.0; arena.num_nodes()],
+            origins: Vec::new(),
+            origin_ids: Vec::new(),
+            volumes: vec![0.0; num_links],
+            od_costs: HashMap::new(),
+            total_demand: 0.0,
+        }
+    }
+
+    /// Assigns one destination into this accumulator, reusing the workspace and
+    /// demand column. A destination with no incoming demand is a no-op.
+    fn assign_destination(
+        &mut self,
+        graph: &RouteGraph,
+        arena: &Graph,
+        od: &dyn OdMatrix,
+        zone_ids: &[i64],
+        destination: i64,
+    ) -> Result<(), TransitError> {
         // Collect the demand column of this destination
-        let mut origins: Vec<(i64, f64)> = Vec::new();
-        for &origin in &zone_ids {
+        self.origins.clear();
+        for &origin in zone_ids {
             if origin == destination {
                 continue;
             }
             let demand = od.get(origin, destination);
             if demand > 0.0 {
-                origins.push((origin, demand));
+                self.origins.push((origin, demand));
             }
         }
-        if origins.is_empty() {
-            continue;
+        if self.origins.is_empty() {
+            return Ok(());
         }
 
         if !graph.stops.contains(&destination) {
             return Err(TransitError::UnknownStop { zone: destination });
         }
-        for &(origin, _) in &origins {
+        for &(origin, _) in &self.origins {
             if !graph.stops.contains(&origin) {
                 return Err(TransitError::UnknownStop { zone: origin });
             }
@@ -616,18 +662,18 @@ pub fn assign_transit_with_options(
             .ok_or(TransitError::UnknownStop { zone: destination })?;
 
         // Seed the reused demand column, remembering which entries to clear
-        origin_ids.clear();
-        for &(origin, demand) in &origins {
+        self.origin_ids.clear();
+        for &(origin, demand) in &self.origins {
             let origin_id = arena
                 .node_index(&stop_name(origin))
                 .ok_or(TransitError::UnknownStop { zone: origin })?;
-            demand_col[origin_id] = demand;
-            origin_ids.push(origin_id);
+            self.demand_col[origin_id] = demand;
+            self.origin_ids.push(origin_id);
         }
 
-        let result = workspace.assign(dest_id, &demand_col);
+        let result = self.workspace.assign(dest_id, &self.demand_col);
 
-        for (&(origin, demand), &origin_id) in origins.iter().zip(&origin_ids) {
+        for (&(origin, demand), &origin_id) in self.origins.iter().zip(&self.origin_ids) {
             let label = result.labels[origin_id];
             if !label.is_finite() {
                 return Err(TransitError::Unreachable {
@@ -635,21 +681,42 @@ pub fn assign_transit_with_options(
                     destination,
                 });
             }
-            od_costs.insert((origin, destination), label);
-            total_demand += demand;
+            self.od_costs.insert((origin, destination), label);
+            self.total_demand += demand;
         }
 
         // Arena link indices match graph.links / graph.meta order.
         for (idx, &volume) in result.link_vol.iter().enumerate() {
-            volumes[idx] += volume;
+            self.volumes[idx] += volume;
         }
 
         // Reset only the touched entries so the column is reusable
-        for &origin_id in &origin_ids {
-            demand_col[origin_id] = 0.0;
+        for &origin_id in &self.origin_ids {
+            self.demand_col[origin_id] = 0.0;
         }
+
+        Ok(())
     }
 
+    /// Folds another accumulator into this one: link volumes summed element-wise,
+    /// OD costs and total demand combined. Used to merge per-worker results.
+    fn merge(&mut self, other: DestSink<'g>) {
+        for (v, &ov) in self.volumes.iter_mut().zip(other.volumes.iter()) {
+            *v += ov;
+        }
+        self.od_costs.extend(other.od_costs);
+        self.total_demand += other.total_demand;
+    }
+}
+
+/// Turns aggregated link volumes into the public assignment result (typed link
+/// volumes plus per-route and total boardings).
+fn finalize(
+    graph: &RouteGraph,
+    volumes: &[f64],
+    od_costs: HashMap<(i64, i64), f64>,
+    total_demand: f64,
+) -> TransitAssignmentResult {
     let mut route_boardings: HashMap<String, f64> = HashMap::new();
     let mut link_volumes: Vec<TransitLinkVolume> = Vec::with_capacity(graph.meta.len());
     for (idx, meta) in graph.meta.iter().enumerate() {
@@ -669,13 +736,104 @@ pub fn assign_transit_with_options(
 
     let total_boardings = route_boardings.values().sum();
 
-    Ok(TransitAssignmentResult {
+    TransitAssignmentResult {
         link_volumes,
         od_costs,
         route_boardings,
         total_boardings,
         total_demand,
-    })
+    }
+}
+
+/// Parallel (opt-in) variant of [`assign_transit`]: assigns destinations
+/// concurrently with rayon, using default options.
+///
+/// See [`assign_transit_par_with_options`] for when this is (and is not) the
+/// right tool.
+#[cfg(feature = "parallel")]
+pub fn assign_transit_par(
+    network: &TransitNetwork,
+    od: &dyn OdMatrix,
+) -> Result<TransitAssignmentResult, TransitError> {
+    assign_transit_par_with_options(network, od, &TransitAssignmentOptions::default())
+}
+
+/// Parallel (opt-in) variant of [`assign_transit_with_options`].
+///
+/// Destinations are independent, so the assignment fans out over them with
+/// rayon: the interned [`Graph`] is immutable and shared read-only, each worker
+/// keeps its own reusable workspace, and the per-worker link volumes are then
+/// merged. Reach for this on a single large batch assignment (many
+/// destinations, a CLI or one-shot job) where the process has spare cores.
+///
+/// The default [`assign_transit`] / [`assign_transit_with_options`] stay
+/// single-threaded on purpose.
+///
+/// # Services (REST / gRPC): parallelize across requests, not inside one
+///
+/// Do not call this from a request handler. A service is already concurrent
+/// across requests; if every in-flight request also fans out over rayon's
+/// global pool, the pools oversubscribe the cores and tail latency gets worse,
+/// not better. In a service keep each request single-threaded (call
+/// [`assign_transit`]) and let the server's executor provide parallelism across
+/// requests. The larger server win is orthogonal to threading: a [`Graph`] is
+/// immutable and `Sync`, so it can be built once per network and shared across
+/// requests (only the OD changes), removing the per-request graph expansion and
+/// interning. This function does not address that; it only splits one
+/// assignment's destinations across cores.
+///
+/// # Determinism
+///
+/// Results match the serial path up to floating-point summation order: link
+/// volumes and total demand are reduced across workers in a nondeterministic
+/// order, so they can differ from [`assign_transit_with_options`] by rounding
+/// (ULP level, far below any assignment tolerance). OD costs are computed
+/// independently per destination and are identical.
+///
+/// # Errors
+///
+/// Same as [`assign_transit_with_options`]; the first destination that fails
+/// aborts the run.
+#[cfg(feature = "parallel")]
+pub fn assign_transit_par_with_options(
+    network: &TransitNetwork,
+    od: &dyn OdMatrix,
+    options: &TransitAssignmentOptions,
+) -> Result<TransitAssignmentResult, TransitError> {
+    use rayon::prelude::*;
+
+    network.validate()?;
+    validate_options(options)?;
+    let graph = expand_route_graph(network, options);
+
+    let arena = Graph::new(&graph.links, &graph.nodes);
+    let zone_ids = od.zone_ids().to_vec();
+    let num_links = graph.links.len();
+
+    let merged = zone_ids
+        .par_iter()
+        .try_fold(
+            || DestSink::new(&arena, num_links),
+            |mut sink, &destination| {
+                sink.assign_destination(&graph, &arena, od, &zone_ids, destination)?;
+                Ok(sink)
+            },
+        )
+        .try_reduce(
+            || DestSink::new(&arena, num_links),
+            |mut a, b| {
+                a.merge(b);
+                Ok(a)
+            },
+        )?;
+
+    let DestSink {
+        volumes,
+        od_costs,
+        total_demand,
+        ..
+    } = merged;
+    Ok(finalize(&graph, &volumes, od_costs, total_demand))
 }
 
 /// Computes the transit level-of-service (skim): the expected travel time
@@ -1372,5 +1530,38 @@ mod tests {
             assign_transit(&network, &od),
             Err(TransitError::UnknownStop { zone: 99 })
         ));
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_parallel_matches_serial() {
+        let network = paper_network();
+        let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        // Several destinations and origins so the parallel fan-out and merge
+        // actually exercise more than one destination.
+        od.set(1, 4, 1.0);
+        od.set(2, 4, 1.0);
+        od.set(3, 4, 1.0);
+        od.set(1, 3, 1.0);
+        od.set(2, 3, 1.0);
+
+        let serial = assign_transit(&network, &od).unwrap();
+        let parallel = assign_transit_par(&network, &od).unwrap();
+
+        // OD costs are computed independently per destination, so they are
+        // identical, not just close.
+        assert_eq!(serial.od_costs, parallel.od_costs);
+
+        // Volumes and totals are reduced across workers, so they match up to
+        // floating-point summation order.
+        assert!((serial.total_demand - parallel.total_demand).abs() <= EPS);
+        assert!((serial.total_boardings - parallel.total_boardings).abs() <= EPS);
+        assert_eq!(serial.link_volumes.len(), parallel.link_volumes.len());
+        for (a, b) in serial.link_volumes.iter().zip(&parallel.link_volumes) {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.route_id, b.route_id);
+            assert_eq!((a.from_stop, a.to_stop), (b.from_stop, b.to_stop));
+            assert!((a.volume - b.volume).abs() <= EPS);
+        }
     }
 }
