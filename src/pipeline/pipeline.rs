@@ -67,6 +67,15 @@ pub struct PipelineTimings {
 /// The transit `network` must use the same zone IDs as the road zones for
 /// its access points (zone centroid = zone ID), so a single OD matrix
 /// splits cleanly across road and transit modes.
+///
+/// **Units:** the transit network must be built in **minutes** here. Mode
+/// choice compares the transit skim against the road skim, and the pipeline
+/// works in minutes (the road link times are converted from hours to
+/// minutes internally), so transit segment times, headways and walk times
+/// must be in minutes too. A GTFS-derived network is in seconds - convert
+/// it to minutes before feeding it to the pipeline (standalone
+/// [`assign_transit`](crate::transit::assign_transit) has no such
+/// requirement; it only needs internal consistency).
 pub struct TransitInput<'a> {
     /// Transit routes and (zone-access) walk links.
     pub network: &'a TransitNetwork,

@@ -101,7 +101,7 @@ fn main() {
     let class_names = ["car", "truck"];
     let config = ModelConfig::new()
         .with_assignment_method(AssignmentMethodType::FrankWolfe)
-        .with_max_iterations(50)
+        .with_max_iterations(200)
         .with_convergence_gap(1e-4)
         .with_feedback_iterations(3)
         .with_verbose_level(VerboseLevel::Main)
@@ -123,7 +123,10 @@ fn main() {
             network: &transit_network,
             options: TransitAssignmentOptions::default(),
             fixed_od: None,
-            analysis_period: None,
+            // 1-hour analysis period (times are in minutes): turns on the
+            // bus load on the east road links, so buses and cars congest
+            // each other.
+            analysis_period: Some(60.0),
         }),
         None,
     )
@@ -457,12 +460,22 @@ fn build_network() -> Network {
         let (_, lat2, lon2) = coords.iter().find(|&&(id, _, _)| id == b).unwrap();
         let dist = haversine_km(*lat1, *lon1, *lat2, *lon2) * 1000.0;
 
+        // The eastern corridor (edges 1-2 and 2-4, links 100/101/104/105)
+        // is deliberately narrow so it congests: that is where the buses
+        // run, so the road<->transit coupling shows there. The western
+        // corridor (the tram side) is wide and stays free-flowing.
+        let capacity = if (a, b) == (1, 2) || (a, b) == (2, 4) {
+            1000.0
+        } else {
+            1800.0
+        };
+
         // Forward: a -> b
         net.add_link(
             Link::new(link_id, a, b)
                 .with_length_meters(dist)
                 .with_free_speed(60.0)
-                .with_capacity(1800.0)
+                .with_capacity(capacity)
                 .with_lanes_num(2)
                 .build(),
         )
@@ -475,7 +488,7 @@ fn build_network() -> Network {
             Link::new(link_id, b, a)
                 .with_length_meters(dist)
                 .with_free_speed(60.0)
-                .with_capacity(1800.0)
+                .with_capacity(capacity)
                 .with_lanes_num(2)
                 .build(),
         )
@@ -595,33 +608,42 @@ fn build_zones() -> Vec<Zone> {
 fn build_transit_network() -> TransitNetwork {
     let mut net = TransitNetwork::new();
 
-    // Eastern buses
-    net.add_route(TransitRoute::new(
-        "B1",
-        vec![STOP_Z1_EAST, STOP_Z2, STOP_Z4_EAST],
-        vec![6.0, 7.0],
-        6.0,
-    ));
-    net.add_route(TransitRoute::new(
-        "B1r",
-        vec![STOP_Z4_EAST, STOP_Z2, STOP_Z1_EAST],
-        vec![7.0, 6.0],
-        6.0,
-    ));
-    net.add_route(TransitRoute::new(
-        "B2",
-        vec![STOP_Z1_EAST, STOP_Z4_EAST],
-        vec![11.0],
-        12.0,
-    ));
-    net.add_route(TransitRoute::new(
-        "B2r",
-        vec![STOP_Z4_EAST, STOP_Z1_EAST],
-        vec![11.0],
-        12.0,
-    ));
+    // Eastern buses run in mixed traffic: each segment declares the road
+    // links it uses (100/101 on 1<->2, 104/105 on 2<->4), so the buses
+    // preload those links and their in-vehicle times follow the road
+    // congestion. Road links 100 = 1->2, 101 = 2->1, 104 = 2->4, 105 = 4->2.
+    net.add_route(
+        TransitRoute::new(
+            "B1",
+            vec![STOP_Z1_EAST, STOP_Z2, STOP_Z4_EAST],
+            vec![6.0, 7.0],
+            6.0,
+        )
+        .with_segment_links(vec![vec![100], vec![104]]),
+    );
+    net.add_route(
+        TransitRoute::new(
+            "B1r",
+            vec![STOP_Z4_EAST, STOP_Z2, STOP_Z1_EAST],
+            vec![7.0, 6.0],
+            6.0,
+        )
+        .with_segment_links(vec![vec![105], vec![101]]),
+    );
+    net.add_route(
+        TransitRoute::new("B2", vec![STOP_Z1_EAST, STOP_Z4_EAST], vec![11.0], 12.0)
+            .with_segment_links(vec![vec![100, 104]]),
+    );
+    net.add_route(
+        TransitRoute::new("B2r", vec![STOP_Z4_EAST, STOP_Z1_EAST], vec![11.0], 12.0)
+            .with_segment_links(vec![vec![105, 101]]),
+    );
 
-    // Western tram
+    // Western tram runs on a segregated right-of-way (no segment_links):
+    // its own lane, so it neither loads the road nor is slowed by it - it
+    // stays fast while the buses sit in traffic. A real tram often shares
+    // the street (you would give it segment_links too); we keep it
+    // segregated here to contrast a coupled line with an uncoupled one.
     net.add_route(TransitRoute::new(
         "T1",
         vec![STOP_Z1_WEST, STOP_Z3, STOP_Z4_WEST],
