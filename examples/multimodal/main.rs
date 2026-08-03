@@ -123,6 +123,7 @@ fn main() {
             network: &transit_network,
             options: TransitAssignmentOptions::default(),
             fixed_od: None,
+            analysis_period: None,
         }),
         None,
     )

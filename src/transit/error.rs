@@ -26,6 +26,8 @@ pub enum TransitError {
     InvalidPenalty { name: &'static str, value: f64 },
     /// Access connector parameters are invalid.
     InvalidConnectorParams { reason: &'static str },
+    /// The analysis period is not strictly positive.
+    InvalidAnalysisPeriod { value: f64 },
     /// Two routes share the same id.
     DuplicateRouteId { route_id: String },
     /// An OD zone with demand is not a stop of any route or walk link.
@@ -77,6 +79,13 @@ impl fmt::Display for TransitError {
             }
             TransitError::InvalidConnectorParams { reason } => {
                 write!(f, "invalid access connector parameters: {}", reason)
+            }
+            TransitError::InvalidAnalysisPeriod { value } => {
+                write!(
+                    f,
+                    "analysis period must be strictly positive, got {}",
+                    value
+                )
             }
             TransitError::DuplicateRouteId { route_id } => {
                 write!(f, "duplicate route id '{}'", route_id)

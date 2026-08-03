@@ -41,6 +41,10 @@ pub struct IndexedGraph {
     link_source_idx: Vec<usize>,
     pub link_ff_time: Vec<f64>,
     pub link_capacity: Vec<f64>,
+    // Fixed background PCU per link (e.g. transit vehicles), added to the
+    // flow only when evaluating the volume-delay function so it raises costs
+    // without being part of the assigned volume. All zeros by default.
+    link_background_pcu: Vec<f64>,
     // Zone centroid mapping
     zone_to_node_idx: HashMap<ZoneID, usize>,
     zone_ids: Vec<ZoneID>,
@@ -117,9 +121,35 @@ impl IndexedGraph {
             link_source_idx,
             link_ff_time,
             link_capacity,
+            link_background_pcu: vec![0.0; num_links],
             zone_to_node_idx,
             zone_ids,
         }
+    }
+
+    /// Sets the fixed background PCU per link from a `link_id -> pcu` map,
+    /// e.g. the transit vehicle load from
+    /// [`transit_road_preload`](crate::transit::transit_road_preload).
+    ///
+    /// This background is added to the link flow only when the volume-delay
+    /// function is evaluated (cost and Beckmann integral), so it congests
+    /// the road without being counted as assigned volume. Links absent from
+    /// the map keep a zero background. Replaces any previous background.
+    pub fn set_background_pcu(&mut self, background: &HashMap<LinkID, f64>) {
+        for b in self.link_background_pcu.iter_mut() {
+            *b = 0.0;
+        }
+        for (&link_id, &pcu) in background {
+            if let Some(&idx) = self.link_to_idx.get(&link_id) {
+                self.link_background_pcu[idx] = pcu;
+            }
+        }
+    }
+
+    /// The fixed background PCU per link (indexed by link index).
+    #[inline]
+    pub fn link_background_pcu(&self) -> &[f64] {
+        &self.link_background_pcu
     }
 
     /// Get zone IDs.
@@ -425,7 +455,8 @@ impl IndexedGraph {
         out: &mut [f64],
     ) -> Result<(), crate::assignment::AssignmentError> {
         for i in 0..self.num_links {
-            out[i] = vdf.travel_time(self.link_ff_time[i], volumes[i], self.link_capacity[i])?;
+            let flow = volumes[i] + self.link_background_pcu[i];
+            out[i] = vdf.travel_time(self.link_ff_time[i], flow, self.link_capacity[i])?;
         }
         Ok(())
     }

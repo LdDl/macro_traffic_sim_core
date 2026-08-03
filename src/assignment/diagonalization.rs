@@ -367,8 +367,9 @@ fn compute_class_costs(
     vdf: &VdfDispatch,
     out: &mut [f64],
 ) -> Result<(), AssignmentError> {
+    let transit_bg = graph.link_background_pcu();
     for i in 0..graph.num_links {
-        let total_vol = background_pcu[i] + class_volumes[i] * pcu;
+        let total_vol = background_pcu[i] + class_volumes[i] * pcu + transit_bg[i];
         out[i] = ff_time_multiplier
             * vdf.travel_time(graph.link_ff_time[i], total_vol, graph.link_capacity[i])?;
     }
@@ -395,11 +396,12 @@ fn line_search_with_background(
     background_pcu: &[f64],
     vdf: &VdfDispatch,
 ) -> Result<f64, AssignmentError> {
+    let transit_bg = graph.link_background_pcu();
     let eval = |lambda: f64| -> Result<f64, AssignmentError> {
         let mut objective = 0.0;
         for i in 0..graph.num_links {
             let vol = current[i] + lambda * (aux_vols[i] - current[i]);
-            let total = background_pcu[i] + vol * pcu;
+            let total = background_pcu[i] + vol * pcu + transit_bg[i];
             objective += vdf.integral(graph.link_ff_time[i], total, graph.link_capacity[i])?;
         }
         Ok(objective)

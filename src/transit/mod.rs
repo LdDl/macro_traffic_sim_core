@@ -79,6 +79,7 @@ pub mod assignment;
 pub mod connectors;
 pub mod error;
 pub mod from_gtfs;
+pub mod road_interaction;
 pub mod route;
 
 pub use self::assignment::{
@@ -88,4 +89,5 @@ pub use self::assignment::{
 pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
 pub use self::error::TransitError;
 pub use self::from_gtfs::transit_network_from_gtfs;
-pub use self::route::{TransitNetwork, TransitRoute, WalkLink};
+pub use self::road_interaction::transit_road_preload;
+pub use self::route::{DEFAULT_TRANSIT_PCE, TransitNetwork, TransitRoute, WalkLink};

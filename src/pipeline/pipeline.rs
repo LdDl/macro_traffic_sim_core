@@ -25,7 +25,7 @@ use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::transit::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork, assign_transit_with_options,
-    transit_skim_with_options,
+    transit_road_preload, transit_skim_with_options,
 };
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
@@ -80,6 +80,14 @@ pub struct TransitInput<'a> {
     /// transit alternative simply assigns this matrix alone. Must use the
     /// road zone IDs; entries on other zones are ignored.
     pub fixed_od: Option<&'a dyn OdMatrix>,
+    /// Analysis period length (same time unit as the route headways) that
+    /// turns on the transit vehicle load on the road: buses on their
+    /// `segment_links` become a fixed background PCU in the road
+    /// assignment, congesting the roads they share with cars. `None`
+    /// leaves the road assignment unaffected by transit. Only routes that
+    /// declare `segment_links` contribute; see
+    /// [`transit_road_preload`](crate::transit::transit_road_preload).
+    pub analysis_period: Option<f64>,
 }
 
 /// Result of the complete 4-step model pipeline.
@@ -218,7 +226,16 @@ pub fn run_four_step_model(
     };
 
     // Build indexed graph once for skim computation
-    let igraph = IndexedGraph::from_network(network);
+    let mut igraph = IndexedGraph::from_network(network);
+    // Transit vehicles as a fixed background load on the road they share
+    // with cars. Flow-independent (headways are inputs), so set once here
+    // and reused by every assignment iteration.
+    if let Some(t) = &transit
+        && let Some(period) = t.analysis_period
+    {
+        let preload = transit_road_preload(t.network, period)?;
+        igraph.set_background_pcu(&preload);
+    }
     let mut skim_costs = vec![0.0; igraph.num_links];
     igraph.compute_costs(&vec![0.0; igraph.num_links], &config.bpr, &mut skim_costs)?;
     #[cfg(feature = "parallel")]
@@ -885,6 +902,7 @@ mod tests {
                 network: &transit_net,
                 options: TransitAssignmentOptions::default(),
                 fixed_od: None,
+                analysis_period: None,
             }),
             None,
         )
@@ -922,6 +940,7 @@ mod tests {
                 network: &transit_net,
                 options: TransitAssignmentOptions::default(),
                 fixed_od: None,
+                analysis_period: None,
             }),
             None,
         )
@@ -942,6 +961,7 @@ mod tests {
                 network: &transit_net,
                 options: TransitAssignmentOptions::default(),
                 fixed_od: Some(&fixed),
+                analysis_period: None,
             }),
             None,
         )
@@ -973,6 +993,7 @@ mod tests {
                 network: &transit_net,
                 options: TransitAssignmentOptions::default(),
                 fixed_od: Some(&fixed),
+                analysis_period: None,
             }),
             None,
         )
@@ -982,5 +1003,56 @@ mod tests {
         // The fixed 300 are still assigned.
         let transit = result.transit.expect("fixed transit assigned");
         assert!((transit.total_demand - 300.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pipeline_transit_preload_raises_road_cost() {
+        // A frequent bus running on link 100 loads that link even with no
+        // passengers, so the road cost on 100 rises; link 101 (no bus) is
+        // untouched. Logit has no transit mode, isolating the preload
+        // effect from any mode shift.
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100]]),
+        );
+
+        let run = |analysis_period: Option<f64>| {
+            run_four_step_model(
+                &net,
+                &zones,
+                &RegressionGenerator::new(),
+                &ExponentialImpedance::new(0.1),
+                &MultinomialLogit::default_auto_bike_walk(),
+                &base_config(),
+                Some(TransitInput {
+                    network: &transit_net,
+                    options: TransitAssignmentOptions::default(),
+                    fixed_od: None,
+                    analysis_period,
+                }),
+                None,
+            )
+            .unwrap()
+        };
+
+        let base = run(None);
+        // 60 min period, headway 6 -> 10 buses * 2.0 pce = 20 background PCU
+        // on link 100.
+        let loaded = run(Some(60.0));
+
+        let base_100 = base.assignment.link_costs[&100];
+        let loaded_100 = loaded.assignment.link_costs[&100];
+        assert!(
+            loaded_100 > base_100,
+            "cost on 100 should rise with the bus preload: {} -> {}",
+            base_100,
+            loaded_100
+        );
+        // Link 101 carries no bus and the same auto flow, so it is unchanged.
+        let base_101 = base.assignment.link_costs[&101];
+        let loaded_101 = loaded.assignment.link_costs[&101];
+        assert!((base_101 - loaded_101).abs() < 1e-9);
     }
 }

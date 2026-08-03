@@ -43,7 +43,27 @@ pub struct TransitRoute {
     /// for this route only (a positive value activates the two-node stop
     /// scheme for this route). Must be non-negative.
     pub dwell_time: Option<f64>,
+    /// Road links each segment runs on, for the road interaction: the
+    /// vehicles load those links (background traffic) and the road
+    /// congestion on them drives the segment's in-vehicle time.
+    ///
+    /// `None` (default) means the whole route runs on its own right-of-way
+    /// (e.g. a metro): it neither loads the road nor is slowed by it, and
+    /// keeps its fixed `segment_times`. When `Some`, it holds one entry per
+    /// segment (`stops.len() - 1` of them); the user supplies the link
+    /// sequence each segment traverses (no map matching). An empty inner
+    /// list marks a segment on dedicated right-of-way.
+    pub segment_links: Option<Vec<Vec<i64>>>,
+    /// Road space of one vehicle of this route in passenger-car equivalents,
+    /// used for the background load it puts on the links in `segment_links`.
+    /// Ignored for a route with no road links. Default
+    /// [`DEFAULT_TRANSIT_PCE`].
+    pub pce: f64,
 }
+
+/// Default passenger-car-equivalent road space of a transit vehicle (a
+/// typical standard bus), used when a route does not set its own `pce`.
+pub const DEFAULT_TRANSIT_PCE: f64 = 2.0;
 
 impl TransitRoute {
     /// Creates a new transit route.
@@ -74,6 +94,8 @@ impl TransitRoute {
             boarding_penalty: None,
             alighting_penalty: None,
             dwell_time: None,
+            segment_links: None,
+            pce: DEFAULT_TRANSIT_PCE,
         }
     }
 
@@ -104,6 +126,34 @@ impl TransitRoute {
     /// the two-node stop scheme for this route only.
     pub fn with_dwell_time(mut self, dwell: f64) -> Self {
         self.dwell_time = Some(dwell);
+        self
+    }
+
+    /// Set the road links each segment runs on (one list per segment, in
+    /// order). Puts the route in mixed traffic: it loads those links and
+    /// takes its in-vehicle time from their congestion. An empty list for a
+    /// segment keeps that segment on dedicated right-of-way.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::transit::TransitRoute;
+    ///
+    /// // a bus over stops 1 -> 2 -> 3, its two segments running on links
+    /// // [100] and [104] respectively
+    /// let route = TransitRoute::new("B1", vec![1, 2, 3], vec![6.0, 7.0], 6.0)
+    ///     .with_segment_links(vec![vec![100], vec![104]]);
+    /// assert_eq!(route.segment_links.as_ref().unwrap().len(), 2);
+    /// ```
+    pub fn with_segment_links(mut self, segment_links: Vec<Vec<i64>>) -> Self {
+        self.segment_links = Some(segment_links);
+        self
+    }
+
+    /// Set the vehicle road space in passenger-car equivalents (default
+    /// [`DEFAULT_TRANSIT_PCE`]). Only used when the route has road links.
+    pub fn with_pce(mut self, pce: f64) -> Self {
+        self.pce = pce;
         self
     }
 }
@@ -315,12 +365,22 @@ impl TransitNetwork {
                 ("boarding_penalty", route.boarding_penalty),
                 ("alighting_penalty", route.alighting_penalty),
                 ("dwell_time", route.dwell_time),
+                ("pce", Some(route.pce)),
             ] {
                 if let Some(value) = value
                     && (value.is_nan() || value < 0.0)
                 {
                     return Err(TransitError::InvalidPenalty { name, value });
                 }
+            }
+            if let Some(links) = &route.segment_links
+                && links.len() != route.stops.len() - 1
+            {
+                return Err(TransitError::SegmentTimesMismatch {
+                    route_id: route.id.clone(),
+                    stops: route.stops.len(),
+                    segments: links.len(),
+                });
             }
         }
         Ok(())

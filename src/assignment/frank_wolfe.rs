@@ -131,8 +131,9 @@ impl FrankWolfe {
         lambda: f64,
     ) -> Result<f64, AssignmentError> {
         let mut objective = 0.0;
+        let background = graph.link_background_pcu();
         for i in 0..graph.num_links {
-            let vol = current[i] + lambda * (auxiliary[i] - current[i]);
+            let vol = current[i] + lambda * (auxiliary[i] - current[i]) + background[i];
             objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i])?;
         }
         Ok(objective)
