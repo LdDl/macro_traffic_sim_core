@@ -861,10 +861,10 @@ fn finalize(
     let mut route_boardings: HashMap<String, f64> = HashMap::new();
     let mut link_volumes: Vec<TransitLinkVolume> = Vec::with_capacity(graph.meta.len());
     for (idx, meta) in graph.meta.iter().enumerate() {
-        if meta.kind == TransitLinkKind::Boarding {
-            if let Some(route_id) = &meta.route_id {
-                *route_boardings.entry(route_id.clone()).or_insert(0.0) += volumes[idx];
-            }
+        if meta.kind == TransitLinkKind::Boarding
+            && let Some(route_id) = &meta.route_id
+        {
+            *route_boardings.entry(route_id.clone()).or_insert(0.0) += volumes[idx];
         }
         link_volumes.push(TransitLinkVolume {
             kind: meta.kind,
