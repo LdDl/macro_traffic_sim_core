@@ -73,7 +73,9 @@ The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) cra
 
 Transit is fully wired into the 4-step pipeline: mode choice derives the transit demand from a transit skim (or you can supply a fixed exogenous transit OD, e.g. captive riders), and inside the feedback loop transit and road congest each other - a route can declare the road links it runs on, so its vehicles preload those links and its in-vehicle time follows their congestion (a route on its own right-of-way, like a metro, does neither). This frequency-based coupling follows De Cea & Fernandez (1993) - road congestion is an exogenous input to the in-vehicle time - and the two-mode equilibrium of Florian & Spiess (1983). Transit can also be assigned standalone with a manually supplied OD.
 
-See the `transit`, `transit_gtfs`, `gtfs_patterns` and `multimodal` examples.
+**Crowding (congested transit).** Give a `TransitRoute` a per-vehicle `capacity` and the assignment turns on passenger crowding: as the flow a line attracts approaches its capacity, its effective frequency drops and its waiting time rises, so it sheds riders onto less crowded alternatives. This is De Cea & Fernandez's (1993) congested-transit model, where a stop is a queue and "as the number of passengers trying to use a given service approaches its capacity, waiting times increase". Rather than a hard cap they use a BPR-like convex volume-delay term, so the line's effective frequency becomes `f_eff = f / (1 + alpha * (load/capacity)^beta)` (their effective frequency, Eq. 16) - a soft cap that a line can overrun under very heavy demand. Cominetti & Correa (2001) put this on a rigorous footing: waiting times "obey an inverse additive law of the form `1/W_s(v) = sum 1/W_i(v)`", i.e. the Spiess-Florian combined frequency with a flow-dependent `f_i(v)`. So crowding is an outer method-of-successive-averages loop that rescales each line's frequency by its load and re-runs the unchanged optimal-strategies solver - the hyperpaths solver never sees the flow dependence. Uncapacitated routes are unaffected. See `assign_transit_crowded` / `CrowdingParams`, or the pipeline's `TransitInput.crowding`.
+
+See the `transit`, `transit_gtfs`, `gtfs_patterns`, `multimodal` and `transit_crowding` examples.
 
 ## Network format
 
@@ -425,15 +427,18 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     Public Transport Systems: An Equilibrium Model",
     Transportation Science, 27(2), 133-147.
     DOI: 10.1287/trsc.27.2.133
-    In-vehicle time determined by road congestion as an exogenous parameter
-    - basis of the congested transit segment times.
+    Congested-transit model: route sections, road congestion as an exogenous
+    parameter for the in-vehicle time, and the effective-frequency crowding
+    (Eq. 16) - basis of the congested transit segment times and of the
+    crowding assignment.
 
 22. Cominetti, R. and Correa, J. (2001) "Common-Lines and Passenger
     Assignment in Congested Transit Networks",
     Transportation Science, 35(3), 250-267.
     DOI: 10.1287/trsc.35.3.250.10154
-    Congested transit (crowding raises waiting via an inverse-additive law)
-    - reference for future capacity/crowding work.
+    Congested transit: crowding raises waiting via an inverse-additive law
+    on effective frequencies - basis of the crowding assignment
+    (`assign_transit_crowded`).
 
 ## License
 

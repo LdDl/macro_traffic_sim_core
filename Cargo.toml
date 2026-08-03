@@ -70,6 +70,10 @@ path = "examples/gtfs_patterns/main.rs"
 name = "multimodal"
 path = "examples/multimodal/main.rs"
 
+[[example]]
+name = "transit_crowding"
+path = "examples/transit_crowding/main.rs"
+
 [dev-dependencies]
 csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }

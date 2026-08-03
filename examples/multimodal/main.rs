@@ -46,7 +46,7 @@ use macro_traffic_sim_core::mode_choice::MultinomialLogit;
 use macro_traffic_sim_core::od::OdMatrix;
 use macro_traffic_sim_core::pipeline::{TransitInput, haversine_km, run_four_step_model};
 use macro_traffic_sim_core::transit::{
-    TransitAssignmentOptions, TransitLinkKind, TransitNetwork, TransitRoute,
+    CrowdingParams, TransitAssignmentOptions, TransitLinkKind, TransitNetwork, TransitRoute,
 };
 use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 use macro_traffic_sim_core::trip_generation::RegressionGenerator;
@@ -127,6 +127,10 @@ fn main() {
             // bus load on the east road links, so buses and cars congest
             // each other.
             analysis_period: Some(60.0),
+            // Crowding on the same 1-hour period: the east local bus B1 fills
+            // up (its per-vehicle capacity is set below), loses effective
+            // frequency, and sheds riders onto the west tram and the express.
+            crowding: Some(CrowdingParams::new(60.0)),
         }),
         None,
     )
@@ -612,6 +616,12 @@ fn build_transit_network() -> TransitNetwork {
     // links it uses (100/101 on 1<->2, 104/105 on 2<->4), so the buses
     // preload those links and their in-vehicle times follow the road
     // congestion. Road links 100 = 1->2, 101 = 2->1, 104 = 2->4, 105 = 4->2.
+    //
+    // Per-vehicle capacity turns on crowding: the local B1 at a 6-minute
+    // headway is a line capacity of (60/6)*50 = 500 passengers/hour, below
+    // its uncrowded load, so it crowds and sheds riders. The express B2 at
+    // a 12-minute headway seats 60, and the trams are roomy - they absorb
+    // the spillover.
     net.add_route(
         TransitRoute::new(
             "B1",
@@ -619,7 +629,8 @@ fn build_transit_network() -> TransitNetwork {
             vec![6.0, 7.0],
             6.0,
         )
-        .with_segment_links(vec![vec![100], vec![104]]),
+        .with_segment_links(vec![vec![100], vec![104]])
+        .with_capacity(50.0),
     );
     net.add_route(
         TransitRoute::new(
@@ -628,15 +639,18 @@ fn build_transit_network() -> TransitNetwork {
             vec![7.0, 6.0],
             6.0,
         )
-        .with_segment_links(vec![vec![105], vec![101]]),
+        .with_segment_links(vec![vec![105], vec![101]])
+        .with_capacity(50.0),
     );
     net.add_route(
         TransitRoute::new("B2", vec![STOP_Z1_EAST, STOP_Z4_EAST], vec![11.0], 12.0)
-            .with_segment_links(vec![vec![100, 104]]),
+            .with_segment_links(vec![vec![100, 104]])
+            .with_capacity(60.0),
     );
     net.add_route(
         TransitRoute::new("B2r", vec![STOP_Z4_EAST, STOP_Z1_EAST], vec![11.0], 12.0)
-            .with_segment_links(vec![vec![105, 101]]),
+            .with_segment_links(vec![vec![105, 101]])
+            .with_capacity(60.0),
     );
 
     // Western tram runs on a segregated right-of-way (no segment_links):
@@ -644,18 +658,24 @@ fn build_transit_network() -> TransitNetwork {
     // stays fast while the buses sit in traffic. A real tram often shares
     // the street (you would give it segment_links too); we keep it
     // segregated here to contrast a coupled line with an uncoupled one.
-    net.add_route(TransitRoute::new(
-        "T1",
-        vec![STOP_Z1_WEST, STOP_Z3, STOP_Z4_WEST],
-        vec![5.0, 5.0],
-        8.0,
-    ));
-    net.add_route(TransitRoute::new(
-        "T1r",
-        vec![STOP_Z4_WEST, STOP_Z3, STOP_Z1_WEST],
-        vec![5.0, 5.0],
-        8.0,
-    ));
+    net.add_route(
+        TransitRoute::new(
+            "T1",
+            vec![STOP_Z1_WEST, STOP_Z3, STOP_Z4_WEST],
+            vec![5.0, 5.0],
+            8.0,
+        )
+        .with_capacity(120.0),
+    );
+    net.add_route(
+        TransitRoute::new(
+            "T1r",
+            vec![STOP_Z4_WEST, STOP_Z3, STOP_Z1_WEST],
+            vec![5.0, 5.0],
+            8.0,
+        )
+        .with_capacity(120.0),
+    );
 
     // Zone access: zone centroid <-> stop walk links, both directions.
     // Zones 1 and 4 have a choice between the bus and the tram side.

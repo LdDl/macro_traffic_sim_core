@@ -94,11 +94,11 @@ The stops are `location` records: points on road links (`link_id` + `lr` offset 
 
 ### Lines
 
-| Line | Stops | Segments (min) | Headway (min) | Right-of-way |
-|------|-------|----------------|---------------|--------------|
-| B1 | 811 -> 812 -> 814 | 6, 7 | 6 | mixed traffic (links 100, 104) |
-| B2 | 811 -> 814 | 11 | 12 | mixed traffic (links 100, 104) |
-| T1 | 821 -> 823 -> 824 | 5, 5 | 8 | segregated (own tracks) |
+| Line | Stops | Segments (min) | Headway (min) | Seats/veh | Right-of-way |
+|------|-------|----------------|---------------|-----------|--------------|
+| B1 | 811 -> 812 -> 814 | 6, 7 | 6 | 50 | mixed traffic (links 100, 104) |
+| B2 | 811 -> 814 | 11 | 12 | 60 | mixed traffic (links 100, 104) |
+| T1 | 821 -> 823 -> 824 | 5, 5 | 8 | 120 | segregated (own tracks) |
 
 Each line has a reverse twin (`B1r`, `B2r`, `T1r`) with the same times, because a `TransitRoute` is one-way. B1 and B2 share stops 811 and 814, so a zone 1 -> zone 4 passenger faces the classic Spiess-Florian situation: wait for whichever attractive bus comes first.
 
@@ -132,7 +132,7 @@ There is no "assign the zone to its nearest stop" step: the centroid is connecte
 
 ## How transit joins the 4-step pipeline
 
-`run_four_step_model` takes an optional `TransitInput { network, options }`. When present:
+`run_four_step_model` takes an optional `TransitInput` (network, options, an optional fixed OD, the coupling `analysis_period`, and optional `crowding`). When present:
 
 1. Transit skim:
 The pipeline runs the optimal strategies label-setting per destination zone over the transit network, producing a zone-to-zone expected travel time matrix. Here the buses run in mixed traffic, so this skim is recomputed each feedback iteration from the congested road times (see the coupling below); a transit layer entirely on its own right-of-way would have a flow-independent skim, computed once.
@@ -160,6 +160,18 @@ Passing `analysis_period: Some(60.0)` (a one-hour period, times in minutes) and 
 - **Road congestion slows the buses.** The narrow eastern corridor congests, so the in-vehicle time of the bus segments on links 100/104 is scaled up by the road congestion factor; the transit skim there rises. The tram segments on the wide western side are unaffected, and a segregated line would be immune regardless.
 
 Both directions run inside the feedback loop: a slower, pricier eastern transit nudges mode choice, the road reloads, the skim is recomputed, and so on to a joint equilibrium. This is the frequency-based coupling of De Cea & Fernandez (1993) - road congestion is an exogenous input to the in-vehicle time - within the two-mode equilibrium of Florian & Spiess (1983). The effect is modest on this small network but qualitatively clean: the east (mixed-traffic buses) is slowed, the west (segregated tram) is not.
+
+## Crowding
+
+`crowding: Some(CrowdingParams::new(60.0))` turns on passenger crowding, on the same one-hour period. Each line now has a per-vehicle capacity (the Seats/veh column), so its line capacity is `(period / headway) * seats`: the local **B1** seats 50 at a 6-minute headway, i.e. `60/6 * 50 = 500` passengers/hour. Uncrowded, B1 attracts about 537 riders - over that - so it crowds: its effective frequency drops (`f_eff = f / (1 + alpha * (load/capacity)^beta)`, De Cea & Fernandez's Eq. 16), its wait rises, and it sheds riders. The boardings shift accordingly:
+
+| Line | Uncrowded | Crowded |
+|------|-----------|---------|
+| B1 (local, 500/h cap) | 537 | 501 |
+| B2 (express, 250/h cap) | 40 | 60 |
+| T1 (tram, 900/h cap) | 356 | 372 |
+
+B1 settles at its ~500 capacity, the express B2 fills to its cap, and the roomy tram picks up the rest. Crowding is an outer method-of-successive-averages loop around the unchanged optimal-strategies solver, so it composes with the road coupling above without touching either. Uncapacitated lines are unaffected. The dedicated `transit_crowding` example isolates this on two parallel lines and sweeps the demand to show the tipping point.
 
 ## The transit skim, step by step
 
@@ -264,7 +276,8 @@ net.add_route(
 net.add_walk_link(ZONE_1, STOP_Z1_EAST, 3.0);
 
 // 3. Transit as a mode-choice alternative, assigned inside the pipeline.
-// analysis_period turns on the two-way road<->transit coupling.
+// analysis_period turns on the two-way road<->transit coupling;
+// crowding makes over-capacity lines shed riders (Seats/veh above).
 let logit = MultinomialLogit::default_auto_bike_walk_transit();
 let result = run_four_step_model(
     &network, &zones, &trip_gen, &impedance, &logit, &config,
@@ -273,6 +286,7 @@ let result = run_four_step_model(
         options: Default::default(),
         fixed_od: None,
         analysis_period: Some(60.0),
+        crowding: Some(CrowdingParams::new(60.0)),
     }),
     None,
 )?;
@@ -283,7 +297,8 @@ let transit = result.transit.unwrap();
 
 - Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment model for transit networks". Transportation Research Part B 23(2), 83-102. DOI: [10.1016/0191-2615(89)90034-9](https://doi.org/10.1016/0191-2615(89)90034-9)
 - Florian, M. and Spiess, H. (1983) "On Binary Mode Choice/Assignment Models". Transportation Science 17(1), 32-47. DOI: [10.1287/trsc.17.1.32](https://doi.org/10.1287/trsc.17.1.32) - the two-mode road+transit equilibrium behind the coupling
-- De Cea, J. and Fernandez, E. (1993) "Transit Assignment for Congested Public Transport Systems: An Equilibrium Model". Transportation Science 27(2), 133-147. DOI: [10.1287/trsc.27.2.133](https://doi.org/10.1287/trsc.27.2.133) - road congestion as an exogenous input to the in-vehicle time
+- De Cea, J. and Fernandez, E. (1993) "Transit Assignment for Congested Public Transport Systems: An Equilibrium Model". Transportation Science 27(2), 133-147. DOI: [10.1287/trsc.27.2.133](https://doi.org/10.1287/trsc.27.2.133) - road congestion as an exogenous input to the in-vehicle time, and the effective-frequency crowding (Eq. 16)
+- Cominetti, R. and Correa, J. (2001) "Common-Lines and Passenger Assignment in Congested Transit Networks". Transportation Science 35(3), 250-267. DOI: [10.1287/trsc.35.3.250.10154](https://doi.org/10.1287/trsc.35.3.250.10154) - the inverse-additive law behind the crowding effective frequency
 - GMNS `location` table: https://github.com/zephyr-data-specs/GMNS/blob/develop/docs/spec/location.md
 - [`transit`](../transit/README.md) - the paper's network traced against its Tables 2 and 3, standalone assignment with a manual OD
 - [`transit_gtfs`](../transit_gtfs/README.md) - the same chain driven by a GTFS dataset

@@ -59,6 +59,15 @@ pub struct TransitRoute {
     /// Ignored for a route with no road links. Default
     /// [`DEFAULT_TRANSIT_PCE`].
     pub pce: f64,
+    /// Passenger capacity of one vehicle of this route (seats plus standees),
+    /// enabling crowding: as the boarding flow approaches the line capacity
+    /// `(analysis_period / headway) * capacity`, the line's effective
+    /// frequency drops and its waiting time rises (De Cea & Fernandez, 1993;
+    /// Cominetti & Correa, 2001).
+    ///
+    /// `None` (default) means the line is uncapacitated - no crowding, the
+    /// plain Spiess-Florian behaviour. Must be strictly positive when set.
+    pub capacity: Option<f64>,
 }
 
 /// Default passenger-car-equivalent road space of a transit vehicle (a
@@ -96,6 +105,7 @@ impl TransitRoute {
             dwell_time: None,
             segment_links: None,
             pce: DEFAULT_TRANSIT_PCE,
+            capacity: None,
         }
     }
 
@@ -154,6 +164,24 @@ impl TransitRoute {
     /// [`DEFAULT_TRANSIT_PCE`]). Only used when the route has road links.
     pub fn with_pce(mut self, pce: f64) -> Self {
         self.pce = pce;
+        self
+    }
+
+    /// Set the passenger capacity of one vehicle, enabling crowding on this
+    /// line. Must be strictly positive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::transit::TransitRoute;
+    ///
+    /// // a minibus that seats 20 - crowds quickly
+    /// let route = TransitRoute::new("M1", vec![1, 2], vec![10.0], 6.0)
+    ///     .with_capacity(20.0);
+    /// assert_eq!(route.capacity, Some(20.0));
+    /// ```
+    pub fn with_capacity(mut self, capacity: f64) -> Self {
+        self.capacity = Some(capacity);
         self
     }
 }
@@ -380,6 +408,14 @@ impl TransitNetwork {
                     route_id: route.id.clone(),
                     stops: route.stops.len(),
                     segments: links.len(),
+                });
+            }
+            if let Some(capacity) = route.capacity
+                && (capacity.is_nan() || capacity <= 0.0)
+            {
+                return Err(TransitError::InvalidCapacity {
+                    route_id: route.id.clone(),
+                    capacity,
                 });
             }
         }

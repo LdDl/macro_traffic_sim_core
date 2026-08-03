@@ -24,8 +24,9 @@ use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::transit::{
-    TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork, assign_transit_with_options,
-    congest_transit_network, transit_road_preload, transit_skim_with_options,
+    CrowdingParams, TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork,
+    assign_transit_crowded, assign_transit_with_options, congest_transit_network,
+    transit_road_preload, transit_skim_with_options,
 };
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
@@ -97,6 +98,14 @@ pub struct TransitInput<'a> {
     /// declare `segment_links` contribute; see
     /// [`transit_road_preload`](crate::transit::transit_road_preload).
     pub analysis_period: Option<f64>,
+    /// Crowding (congested transit) parameters, `None` to disable. When set,
+    /// the final transit demand is assigned with
+    /// [`assign_transit_crowded`](crate::transit::assign_transit_crowded)
+    /// instead of the uncrowded solver: lines that carry passengers up to
+    /// their per-vehicle `capacity` lose effective frequency and shed load
+    /// onto less crowded alternatives. Only routes with a `capacity` set
+    /// crowd; the rest are unaffected.
+    pub crowding: Option<CrowdingParams>,
 }
 
 /// Result of the complete 4-step model pipeline.
@@ -530,7 +539,14 @@ pub fn run_four_step_model(
                         // Use the congested transit network if it was built
                         // (transit runs on roads), else the free-flow one.
                         let net = congested_transit_net.as_ref().unwrap_or(t.network);
-                        let result = assign_transit_with_options(net, &transit_od, &t.options)?;
+                        // Crowding, when enabled, wraps the solver in its
+                        // own outer averaging loop on the same network.
+                        let result = match &t.crowding {
+                            Some(crowding) => {
+                                assign_transit_crowded(net, &transit_od, &t.options, crowding)?
+                            }
+                            None => assign_transit_with_options(net, &transit_od, &t.options)?,
+                        };
                         t_assignment += step_start.elapsed();
                         Some(result)
                     } else {
@@ -942,6 +958,7 @@ mod tests {
                 options: TransitAssignmentOptions::default(),
                 fixed_od: None,
                 analysis_period: None,
+                crowding: None,
             }),
             None,
         )
@@ -980,6 +997,7 @@ mod tests {
                 options: TransitAssignmentOptions::default(),
                 fixed_od: None,
                 analysis_period: None,
+                crowding: None,
             }),
             None,
         )
@@ -1001,6 +1019,7 @@ mod tests {
                 options: TransitAssignmentOptions::default(),
                 fixed_od: Some(&fixed),
                 analysis_period: None,
+                crowding: None,
             }),
             None,
         )
@@ -1033,6 +1052,7 @@ mod tests {
                 options: TransitAssignmentOptions::default(),
                 fixed_od: Some(&fixed),
                 analysis_period: None,
+                crowding: None,
             }),
             None,
         )
@@ -1070,6 +1090,7 @@ mod tests {
                     options: TransitAssignmentOptions::default(),
                     fixed_od: None,
                     analysis_period,
+                    crowding: None,
                 }),
                 None,
             )
@@ -1167,6 +1188,7 @@ mod tests {
                 options: TransitAssignmentOptions::default(),
                 fixed_od: None,
                 analysis_period: None,
+                crowding: None,
             }),
             None,
         )
