@@ -292,6 +292,7 @@ macro_traffic_sim_core
     types               - NodeID, LinkID, ZoneID, AgentType, LinkType and so on.
     defaults            - default speed/capacity/lanes by link type
     error               - GraphError
+    location/           - GMNS location: point on a link (link_id + offset), the road-transit bridge
     meso/               - mesoscopic network
       node              - Node (intersection/mid-link point)
       link              - Link (road segment or connection/turn)
@@ -299,6 +300,15 @@ macro_traffic_sim_core
   mode_choice/          - multinomial logit mode split
   od/                   - OD matrices (dense and sparse)
   pipeline/             - 4-step model orchestrator
+  transit/              - frequency-based public transit (optimal strategies)
+    route               - TransitRoute, WalkLink, TransitNetwork data model
+    assignment          - route graph expansion, assign_transit, skims
+      congested         - strict-capacity congested equilibrium (Cepeda-Cominetti-Florian)
+    crowding            - soft-capacity crowding (De Cea-Fernandez / Cominetti-Correa)
+    connectors          - zone access connector generation from coordinates
+    road_interaction    - transit <-> road coupling (vehicle preload + congested times)
+    from_gtfs           - GTFS pattern reconstruction (frequencies + stop_times)
+    error               - TransitError
   trip_distribution/    - gravity model + Furness balancing + impedance
   trip_generation/      - regression and cross-classification generators
   verbose/              - structured logging (tracing-based)
