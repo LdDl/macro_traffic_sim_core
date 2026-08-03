@@ -464,9 +464,7 @@ pub fn assign_transit_congested(
         // Method of successive averages update.
         let step = 1.0 / (k as f64 + 1.0);
         for (&destination, hat) in &v_hat {
-            let current = v_dest
-                .entry(destination)
-                .or_insert_with(|| vec![0.0; n]);
+            let current = v_dest.entry(destination).or_insert_with(|| vec![0.0; n]);
             for idx in 0..n {
                 current[idx] = (1.0 - step) * current[idx] + step * hat[idx];
             }
@@ -603,7 +601,11 @@ mod tests {
         assert!((ac - 97.4).abs() < 0.2, "A->C time {} (paper 97.36)", ac);
         // Express stays within its 320/h capacity.
         assert!(express < 320.0, "express {} exceeds capacity", express);
-        assert!(result.relative_gap <= GAP_TOL, "gap {}", result.relative_gap);
+        assert!(
+            result.relative_gap <= GAP_TOL,
+            "gap {}",
+            result.relative_gap
+        );
     }
 
     #[test]
@@ -630,7 +632,12 @@ mod tests {
         let a = &result.assignment;
         let big = a.route_boardings["Big"];
         let small = a.route_boardings["Small"];
-        assert!((big + small - 500.0).abs() < 1.0, "conservation {} {}", big, small);
+        assert!(
+            (big + small - 500.0).abs() < 1.0,
+            "conservation {} {}",
+            big,
+            small
+        );
         // The capacity-limited line stays below its line capacity and carries
         // less than the roomy line.
         assert!(small < 300.0, "small {} exceeds its capacity", small);
@@ -682,6 +689,10 @@ mod tests {
         );
         let ac = a.od_costs[&(1, 3)];
         assert!((ac - 40.02).abs() < 0.05, "A->C time {} (paper 40.02)", ac);
-        assert!(result.relative_gap <= GAP_TOL, "gap {}", result.relative_gap);
+        assert!(
+            result.relative_gap <= GAP_TOL,
+            "gap {}",
+            result.relative_gap
+        );
     }
 }

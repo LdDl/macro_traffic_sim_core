@@ -292,8 +292,12 @@ mod tests {
         // the small line fills, its effective frequency drops, and the big
         // line takes the larger share.
         let mut network = TransitNetwork::new();
-        network.add_route(TransitRoute::new("Big", vec![1, 2], vec![10.0], 10.0).with_capacity(1000.0));
-        network.add_route(TransitRoute::new("Small", vec![1, 2], vec![10.0], 10.0).with_capacity(30.0));
+        network.add_route(
+            TransitRoute::new("Big", vec![1, 2], vec![10.0], 10.0).with_capacity(1000.0),
+        );
+        network.add_route(
+            TransitRoute::new("Small", vec![1, 2], vec![10.0], 10.0).with_capacity(30.0),
+        );
         let mut od = DenseOdMatrix::new(vec![1, 2]);
         od.set(1, 2, 600.0);
 
@@ -306,7 +310,12 @@ mod tests {
         .unwrap();
         let big = result.route_boardings["Big"];
         let small = result.route_boardings["Small"];
-        assert!((big + small - 600.0).abs() < 1e-3, "conservation: {} + {}", big, small);
+        assert!(
+            (big + small - 600.0).abs() < 1e-3,
+            "conservation: {} + {}",
+            big,
+            small
+        );
         assert!(big > small, "big {} should exceed small {}", big, small);
         // The uncrowded split would be 300/300; crowding pushed flow off Small.
         assert!(small < 300.0);

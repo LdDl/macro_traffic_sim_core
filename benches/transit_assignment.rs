@@ -14,7 +14,12 @@ fn build_grid(rows: i64, cols: i64) -> (TransitNetwork, DenseOdMatrix) {
     for r in 0..rows {
         let mut stops: Vec<i64> = (0..cols).map(|c| stop(r, c)).collect();
         let times = vec![3.0; (cols - 1) as usize];
-        network.add_route(TransitRoute::new(&format!("R{}e", r), stops.clone(), times.clone(), 6.0));
+        network.add_route(TransitRoute::new(
+            &format!("R{}e", r),
+            stops.clone(),
+            times.clone(),
+            6.0,
+        ));
         stops.reverse();
         network.add_route(TransitRoute::new(&format!("R{}w", r), stops, times, 6.0));
     }
@@ -22,7 +27,12 @@ fn build_grid(rows: i64, cols: i64) -> (TransitNetwork, DenseOdMatrix) {
     for c in 0..cols {
         let mut stops: Vec<i64> = (0..rows).map(|r| stop(r, c)).collect();
         let times = vec![3.0; (rows - 1) as usize];
-        network.add_route(TransitRoute::new(&format!("C{}s", c), stops.clone(), times.clone(), 6.0));
+        network.add_route(TransitRoute::new(
+            &format!("C{}s", c),
+            stops.clone(),
+            times.clone(),
+            6.0,
+        ));
         stops.reverse();
         network.add_route(TransitRoute::new(&format!("C{}n", c), stops, times, 6.0));
     }

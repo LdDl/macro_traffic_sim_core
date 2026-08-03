@@ -61,15 +61,9 @@ fn main() {
     let small_cap = line_capacity(SMALL_SEATS);
 
     println!("Two parallel lines A -> B, identical {HEADWAY}-minute headway:");
-    println!(
-        "  Big:   {BIG_SEATS:.0} seats/vehicle -> {big_cap:.0} passengers/hour capacity"
-    );
-    println!(
-        "  Small: {SMALL_SEATS:.0} seats/vehicle -> {small_cap:.0} passengers/hour capacity"
-    );
-    println!(
-        "\nUncrowded, the two equal frequencies always split demand 50/50."
-    );
+    println!("  Big:   {BIG_SEATS:.0} seats/vehicle -> {big_cap:.0} passengers/hour capacity");
+    println!("  Small: {SMALL_SEATS:.0} seats/vehicle -> {small_cap:.0} passengers/hour capacity");
+    println!("\nUncrowded, the two equal frequencies always split demand 50/50.");
     println!("Crowded, the Small line stops growing once it fills.\n");
 
     let crowding = CrowdingParams::new(ANALYSIS_PERIOD);
@@ -109,17 +103,9 @@ fn main() {
         "\nBelow ~{:.0} passengers/hour (2 x Small capacity) both lines have",
         2.0 * small_cap
     );
-    println!(
-        "spare seats and the split stays even. Above it the Small line's growth"
-    );
-    println!(
-        "flattens out near its {small_cap:.0}-passenger capacity and the Big line takes"
-    );
-    println!(
-        "most of the extra demand. The effective-frequency law is a soft BPR-like"
-    );
-    println!(
-        "penalty, not a hard cutoff, so the Small line still creeps over capacity"
-    );
+    println!("spare seats and the split stays even. Above it the Small line's growth");
+    println!("flattens out near its {small_cap:.0}-passenger capacity and the Big line takes");
+    println!("most of the extra demand. The effective-frequency law is a soft BPR-like");
+    println!("penalty, not a hard cutoff, so the Small line still creeps over capacity");
     println!("under very heavy demand rather than refusing passengers outright.");
 }
