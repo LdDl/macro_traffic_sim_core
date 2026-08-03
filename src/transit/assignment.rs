@@ -33,6 +33,11 @@ use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
 use crate::transit::route::TransitNetwork;
 
+// Strict-capacity congested assignment (Cepeda-Cominetti-Florian 2006). It
+// is a child module so it can reuse this module's private route-graph
+// expansion and per-destination solve without exposing them in the API.
+pub mod congested;
+
 /// The role of a link in the expanded route graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransitLinkKind {

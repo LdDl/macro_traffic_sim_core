@@ -73,9 +73,11 @@ The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) cra
 
 Transit is fully wired into the 4-step pipeline: mode choice derives the transit demand from a transit skim (or you can supply a fixed exogenous transit OD, e.g. captive riders), and inside the feedback loop transit and road congest each other - a route can declare the road links it runs on, so its vehicles preload those links and its in-vehicle time follows their congestion (a route on its own right-of-way, like a metro, does neither). This frequency-based coupling follows De Cea & Fernandez (1993) - road congestion is an exogenous input to the in-vehicle time - and the two-mode equilibrium of Florian & Spiess (1983). Transit can also be assigned standalone with a manually supplied OD.
 
-**Crowding (congested transit).** Give a `TransitRoute` a per-vehicle `capacity` and the assignment turns on passenger crowding: as the flow a line attracts approaches its capacity, its effective frequency drops and its waiting time rises, so it sheds riders onto less crowded alternatives. This is De Cea & Fernandez's (1993) congested-transit model, where a stop is a queue and "as the number of passengers trying to use a given service approaches its capacity, waiting times increase". Rather than a hard cap they use a BPR-like convex volume-delay term, so the line's effective frequency becomes `f_eff = f / (1 + alpha * (load/capacity)^beta)` (their effective frequency, Eq. 16) - a soft cap that a line can overrun under very heavy demand. Cominetti & Correa (2001) put this on a rigorous footing: waiting times "obey an inverse additive law of the form `1/W_s(v) = sum 1/W_i(v)`", i.e. the Spiess-Florian combined frequency with a flow-dependent `f_i(v)`. So crowding is an outer method-of-successive-averages loop that rescales each line's frequency by its load and re-runs the unchanged optimal-strategies solver - the hyperpaths solver never sees the flow dependence. Uncapacitated routes are unaffected. See `assign_transit_crowded` / `CrowdingParams`, or the pipeline's `TransitInput.crowding`.
+**Crowding (soft capacity).** Give a `TransitRoute` a per-vehicle `capacity` and the assignment turns on passenger crowding: as the flow a line attracts approaches its capacity, its effective frequency drops and its waiting time rises, so it sheds riders onto less crowded alternatives. This is De Cea & Fernandez's (1993) congested-transit model, where a stop is a queue and "as the number of passengers trying to use a given service approaches its capacity, waiting times increase". Rather than a hard cap they use a BPR-like convex volume-delay term, so the line's effective frequency becomes `f_eff = f / (1 + alpha * (load/capacity)^beta)` (their effective frequency, Eq. 16) - a soft cap that a line can overrun under very heavy demand. Cominetti & Correa (2001) put this on a rigorous footing: waiting times "obey an inverse additive law of the form `1/W_s(v) = sum 1/W_i(v)`", i.e. the Spiess-Florian combined frequency with a flow-dependent `f_i(v)`. So crowding is an outer method-of-successive-averages loop that rescales each line's frequency by its load and re-runs the unchanged optimal-strategies solver - the hyperpaths solver never sees the flow dependence. Uncapacitated routes are unaffected. See `assign_transit_crowded` / `CrowdingParams`, or the pipeline's `TransitInput.crowding`.
 
-See the `transit`, `transit_gtfs`, `gtfs_patterns`, `multimodal` and `transit_crowding` examples.
+**Strict capacity (Cepeda-Cominetti-Florian).** `assign_transit_congested` / `CongestedParams` is the rigorous congested equilibrium of Cepeda, Cominetti & Florian (2006) - the algorithm behind EMME's capacitated transit assignment. It uses the strict effective frequency `f_a = mu * (1 - (v_a / (mu*c - v'_a + v_a))^beta)`, which vanishes as the on-board flow reaches the line capacity, so a line cannot be overloaded: excess demand is forced onto other lines or onto walking, and the method reveals corridors that lack capacity. Convergence is measured by their computable gap function `G(v)` (Theorem 3.2), zero exactly at equilibrium, so the outer method-of-successive-averages loop has a rigorous stopping rule. Like crowding it wraps the unchanged optimal-strategies solver, generalizing the plain Spiess-Florian model (which is its uncongested special case). The `transit_congested` example reproduces the paper's own worked example.
+
+See the `transit`, `transit_gtfs`, `gtfs_patterns`, `multimodal`, `transit_crowding` and `transit_congested` examples.
 
 ## Network format
 
@@ -167,7 +169,7 @@ All examples build an in-memory network and run without external files.
 | [`gtfs_patterns`](examples/gtfs_patterns/) | How GTFS trips are grouped into patterns (template trips, directions, short-turns, interpolation) |
 | [`multimodal`](examples/multimodal/) | Cars and public transit on one network: 4-step road pipeline + buses/tram over GMNS locations |
 | [`transit_crowding`](examples/transit_crowding/) | Crowding: two parallel lines, demand sweep to the tipping point where the small line runs out of seats |
-| [`transit_decea`](examples/transit_decea/) | Crowding on de Cea & Fernandez's (1993) Modified Network G (paper topology; Spiess solution + effective-frequency crowding) |
+| [`transit_congested`](examples/transit_congested/) | Strict-capacity congested equilibrium (Cepeda-Cominetti-Florian 2006), reproducing the paper's worked example |
 
 ```sh
 cargo run --example simple_network
@@ -441,6 +443,15 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     Congested transit: crowding raises waiting via an inverse-additive law
     on effective frequencies - basis of the crowding assignment
     (`assign_transit_crowded`).
+
+23. Cepeda, M., Cominetti, R. and Florian, M. (2006) "A frequency-based
+    assignment model for congested transit networks with strict capacity
+    constraints: characterization and computation of equilibria",
+    Transportation Research Part B, 40(6), 437-459.
+    DOI: 10.1016/j.trb.2005.05.006
+    Strict-capacity congested equilibrium with a computable gap function,
+    solved by MSA over the Spiess-Florian solver - basis of the congested
+    assignment (`assign_transit_congested`).
 
 ## License
 

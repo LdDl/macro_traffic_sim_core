@@ -87,6 +87,9 @@ pub use self::assignment::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
     assign_transit, assign_transit_with_options, transit_skim, transit_skim_with_options,
 };
+pub use self::assignment::congested::{
+    CongestedParams, CongestedResult, assign_transit_congested,
+};
 pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
 pub use self::crowding::{CrowdingParams, assign_transit_crowded};
 pub use self::error::TransitError;

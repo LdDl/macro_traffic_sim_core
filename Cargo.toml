@@ -75,8 +75,8 @@ name = "transit_crowding"
 path = "examples/transit_crowding/main.rs"
 
 [[example]]
-name = "transit_decea"
-path = "examples/transit_decea/main.rs"
+name = "transit_congested"
+path = "examples/transit_congested/main.rs"
 
 [dev-dependencies]
 csv = "1"
