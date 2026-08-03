@@ -18,7 +18,7 @@ lua = ["mlua"]
 
 [dependencies]
 gtfs-rs = { version = "0.1.0" }
-hyperpaths-rs = { version = "0.1.1" }
+hyperpaths-rs = { version = "0.2.0" }
 ordered-float = "4"
 rayon = { version = "1", optional = true }
 mlua = { version = "0.12", features = ["lua54", "vendored"], optional = true }
@@ -102,4 +102,8 @@ harness = false
 name = "lua_vdf"
 harness = false
 required-features = ["lua"]
+
+[[bench]]
+name = "transit_assignment"
+harness = false
 
