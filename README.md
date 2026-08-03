@@ -16,34 +16,46 @@ forecasting:
    combined) controls distance sensitivity. Furness (IPF) balancing ensures
    row/column totals match productions and attractions.
 
-3. **Mode Choice** - splits the total OD matrix into per-mode matrices
-   (AUTO, BIKE, WALK) using a multinomial logit model with configurable
-   utility functions (time, distance, cost coefficients per mode).
+3. **Mode Choice** - splits the total OD matrix into per-mode matrices with a
+   multinomial logit model and configurable utilities (time, distance, cost
+   per mode). Modes are AUTO, BIKE, WALK, and optionally **TRANSIT** (public
+   transport). The transit alternative is fed by a transit level-of-service
+   skim, so how much demand rides transit is decided here, not fixed by hand.
 
-4. **Traffic Assignment** - loads the AUTO OD matrix onto the network to
-   find User Equilibrium link flows. Only AUTO is assigned because BIKE
-   and WALK do not contribute to road congestion. Four algorithms are available:
-   - **Frank-Wolfe** - convex combinations with golden section line search
-   - **MSA** - method of successive averages (step = 1/n)
-   - **Gradient Projection** - path-based with explicit path management
-   - **Diagonalization** - Gauss-Seidel relaxation for per-class VDFs (Dafermos, 1982)
+4. **Traffic Assignment** - loads the AUTO OD onto the road network for User
+   Equilibrium link flows (BIKE and WALK do not congest roads). Four
+   algorithms: **Frank-Wolfe**, **MSA**, **Gradient Projection**, and
+   **Diagonalization** (per-class VDFs, Dafermos, 1982). The TRANSIT OD is
+   assigned separately with the **optimal strategies** algorithm (Spiess &
+   Florian, 1989) on the transit network.
 
 Steps 2-4 run inside a **feedback loop**: after each assignment the congested
-travel times update the skim matrix, which feeds back into distribution and
-mode choice. This captures the interaction between congestion and
+travel times update the skim, which feeds back into distribution and mode
+choice, capturing the interaction between congestion and
 route/destination/mode decisions.
+
+Road and transit are **two-way coupled** inside this loop: transit vehicles
+that run in mixed traffic add a background load to the roads they share with
+cars (so buses help congest the road), and that road congestion in turn
+raises the in-vehicle time of those transit segments (so traffic slows the
+buses). A slower, pricier transit then shifts mode choice back toward cars on
+the next iteration, and vice versa - the two modes reach a joint equilibrium.
 
 ```text
 Trip Generation
       |
       v
-+---> Trip Distribution  <-- skim (travel time)
++---> Trip Distribution  <-- skim (road + transit travel time)
 |           |
 |           v
-|     Mode Choice
-|           |
-|           v
-+---- Assignment -----> update skim from congested costs
+|     Mode Choice  (AUTO / BIKE / WALK / TRANSIT)
+|         |     \
+|         v      v
+|   Road Assign   Transit Assign (optimal strategies)
+|    ^   |              |
+|    |   +-- buses preload the road (PCU)
+|    +------ road congestion slows transit segments
++---- update skims from congested costs
       (repeat N times)
 ```
 
@@ -57,7 +69,11 @@ Passengers do not pick a single line: at each stop they choose a set of attracti
 - **Zone access.** - zone centroids join as pseudo-stops via walk links to several candidate stops; the algorithm itself picks the access stop  per destination (no nearest-stop heuristic).
 - **GTFS input.** - a frequency-based GTFS Schedule dataset is converted into routes: trips are grouped into patterns by stop sequence headways come from `frequencies.txt`, `stop_times` provide relative travel profiles.
 
-The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) crate; the assignment is solved by [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs). Transit demand is currently a separate exogenous OD table (mode choice with a transit alternative is future work). See the `transit`, `transit_gtfs`, `gtfs_patterns` and `multimodal` examples.
+The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) crate; the assignment is solved by [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs).
+
+Transit is fully wired into the 4-step pipeline: mode choice derives the transit demand from a transit skim (or you can supply a fixed exogenous transit OD, e.g. captive riders), and inside the feedback loop transit and road congest each other - a route can declare the road links it runs on, so its vehicles preload those links and its in-vehicle time follows their congestion (a route on its own right-of-way, like a metro, does neither). This frequency-based coupling follows De Cea & Fernandez (1993) - road congestion is an exogenous input to the in-vehicle time - and the two-mode equilibrium of Florian & Spiess (1983). Transit can also be assigned standalone with a manually supplied OD.
+
+See the `transit`, `transit_gtfs`, `gtfs_patterns` and `multimodal` examples.
 
 ## Network format
 
@@ -397,6 +413,27 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     the `transit::from_gtfs` converter).
 
 19. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+
+20. Florian, M. and Spiess, H. (1983) "On Binary Mode Choice/Assignment
+    Models",
+    Transportation Science, 17(1), 32-47.
+    DOI: 10.1287/trsc.17.1.32
+    Two-mode road+transit equilibrium (costs depend on both modes' flows,
+    solved by diagonalization) - basis of the road<->transit coupling.
+
+21. De Cea, J. and Fernandez, E. (1993) "Transit Assignment for Congested
+    Public Transport Systems: An Equilibrium Model",
+    Transportation Science, 27(2), 133-147.
+    DOI: 10.1287/trsc.27.2.133
+    In-vehicle time determined by road congestion as an exogenous parameter
+    - basis of the congested transit segment times.
+
+22. Cominetti, R. and Correa, J. (2001) "Common-Lines and Passenger
+    Assignment in Congested Transit Networks",
+    Transportation Science, 35(3), 250-267.
+    DOI: 10.1287/trsc.35.3.250.10154
+    Congested transit (crowding raises waiting via an inverse-additive law)
+    - reference for future capacity/crowding work.
 
 ## License
 

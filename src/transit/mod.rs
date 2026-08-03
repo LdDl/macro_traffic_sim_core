@@ -89,5 +89,5 @@ pub use self::assignment::{
 pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
 pub use self::error::TransitError;
 pub use self::from_gtfs::transit_network_from_gtfs;
-pub use self::road_interaction::transit_road_preload;
+pub use self::road_interaction::{congest_transit_network, transit_road_preload};
 pub use self::route::{DEFAULT_TRANSIT_PCE, TransitNetwork, TransitRoute, WalkLink};

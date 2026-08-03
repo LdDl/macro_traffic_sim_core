@@ -105,6 +105,88 @@ pub fn transit_road_preload(
     Ok(preload)
 }
 
+/// Returns a copy of the transit network with the in-vehicle times of its
+/// mixed-traffic segments raised by road congestion.
+///
+/// For a segment running on road links (its `segment_links` entry is
+/// non-empty), the new time is the route's free-flow segment time scaled by
+/// the congestion factor of those links:
+///
+/// ```text
+/// factor = sum(congested_link_time) / sum(free_flow_link_time)   over the covered links
+/// congested_segment_time = free_flow_segment_time * factor
+/// ```
+///
+/// Scaling the transit baseline (rather than replacing it with the car
+/// times) keeps the transit-specific free-flow time - a bus is slower than
+/// a car even in free flow - while applying the road congestion, and needs
+/// no per-link offset. At free flow the factor is 1, so the times are
+/// unchanged. This is the road congestion treated as an exogenous input to
+/// the in-vehicle time, as in De Cea and Fernandez (1993).
+///
+/// Segments on dedicated right-of-way (`None` route `segment_links`, or an
+/// empty inner list) keep their fixed times. Links missing from either time
+/// map are ignored; a segment whose covered links are all missing keeps its
+/// free-flow time.
+///
+/// # Arguments
+///
+/// * `network` - The transit network (free-flow segment times)
+/// * `free_flow_link_time` - `link_id -> free-flow road travel time`
+/// * `congested_link_time` - `link_id -> congested road travel time`
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use macro_traffic_sim_core::transit::{congest_transit_network, TransitNetwork, TransitRoute};
+///
+/// let mut network = TransitNetwork::new();
+/// // one 10-min segment running on link 100
+/// network.add_route(
+///     TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+///         .with_segment_links(vec![vec![100]]),
+/// );
+///
+/// // link 100 is twice as slow when congested -> the segment doubles
+/// let ff = HashMap::from([(100, 1.0)]);
+/// let congested = HashMap::from([(100, 2.0)]);
+/// let net = congest_transit_network(&network, &ff, &congested);
+/// assert_eq!(net.routes[0].segment_times[0], 20.0);
+/// ```
+pub fn congest_transit_network(
+    network: &TransitNetwork,
+    free_flow_link_time: &HashMap<LinkID, f64>,
+    congested_link_time: &HashMap<LinkID, f64>,
+) -> TransitNetwork {
+    let mut out = network.clone();
+    for route in out.routes.iter_mut() {
+        let Some(segment_links) = &route.segment_links else {
+            continue;
+        };
+        for (seq, links) in segment_links.iter().enumerate() {
+            if links.is_empty() || seq >= route.segment_times.len() {
+                continue;
+            }
+            let mut ff_sum = 0.0;
+            let mut congested_sum = 0.0;
+            for link in links {
+                if let (Some(&ff), Some(&congested)) =
+                    (free_flow_link_time.get(link), congested_link_time.get(link))
+                {
+                    ff_sum += ff;
+                    congested_sum += congested;
+                }
+            }
+            if ff_sum > 0.0 {
+                let factor = congested_sum / ff_sum;
+                route.segment_times[seq] *= factor;
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +256,70 @@ mod tests {
         );
         let preload = transit_road_preload(&network, 60.0).unwrap();
         assert!((preload[&100] - 20.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_congest_scales_segment_by_congestion_factor() {
+        let mut network = TransitNetwork::new();
+        // two segments: seg 0 on link 100, seg 1 on link 104
+        network.add_route(
+            TransitRoute::new("B1", vec![1, 2, 3], vec![6.0, 8.0], 6.0)
+                .with_segment_links(vec![vec![100], vec![104]]),
+        );
+        let ff = HashMap::from([(100, 1.0), (104, 2.0)]);
+        // link 100 x3, link 104 x1.5
+        let congested = HashMap::from([(100, 3.0), (104, 3.0)]);
+        let net = congest_transit_network(&network, &ff, &congested);
+        // seg 0: 6 * (3/1) = 18; seg 1: 8 * (3/2) = 12
+        assert!((net.routes[0].segment_times[0] - 18.0).abs() < EPS);
+        assert!((net.routes[0].segment_times[1] - 12.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_congest_multilink_segment() {
+        let mut network = TransitNetwork::new();
+        // one segment covering two links
+        network.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100, 101]]),
+        );
+        let ff = HashMap::from([(100, 2.0), (101, 2.0)]);
+        // total ff 4, congested 4 + 8 = 12 -> factor 3
+        let congested = HashMap::from([(100, 4.0), (101, 8.0)]);
+        let net = congest_transit_network(&network, &ff, &congested);
+        assert!((net.routes[0].segment_times[0] - 30.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_congest_dedicated_unchanged() {
+        let mut network = TransitNetwork::new();
+        // metro (no segment_links) + a tram with one dedicated segment
+        network.add_route(TransitRoute::new("M1", vec![1, 2], vec![5.0], 4.0));
+        network.add_route(
+            TransitRoute::new("T1", vec![1, 2, 3], vec![5.0, 6.0], 8.0)
+                .with_segment_links(vec![vec![100], vec![]]),
+        );
+        let ff = HashMap::from([(100, 1.0)]);
+        let congested = HashMap::from([(100, 5.0)]);
+        let net = congest_transit_network(&network, &ff, &congested);
+        // metro untouched
+        assert!((net.routes[0].segment_times[0] - 5.0).abs() < EPS);
+        // tram seg 0 congested (5 * 5 = 25), seg 1 dedicated (unchanged)
+        assert!((net.routes[1].segment_times[0] - 25.0).abs() < EPS);
+        assert!((net.routes[1].segment_times[1] - 6.0).abs() < EPS);
+    }
+
+    #[test]
+    fn test_congest_free_flow_is_identity() {
+        let mut network = TransitNetwork::new();
+        network.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100]]),
+        );
+        // congested == free-flow -> factor 1 -> unchanged
+        let ff = HashMap::from([(100, 1.5)]);
+        let net = congest_transit_network(&network, &ff, &ff);
+        assert!((net.routes[0].segment_times[0] - 10.0).abs() < EPS);
     }
 
     #[test]

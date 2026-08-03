@@ -25,7 +25,7 @@ use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::transit::{
     TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork, assign_transit_with_options,
-    transit_road_preload, transit_skim_with_options,
+    congest_transit_network, transit_road_preload, transit_skim_with_options,
 };
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
@@ -249,11 +249,28 @@ pub fn run_four_step_model(
     // Wrapped in Rc to share across all 3 mode skims without cloning.
     let distance_skim_rc = Rc::new(distance_skim(network, &zone_ids));
 
-    // Transit skim is invariant across feedback iterations too: the
-    // Spiess-Florian costs are flow-independent, so it does not react to
-    // road congestion (that coupling is a separate future step). Compute it
-    // once here and reuse it in every mode choice pass.
-    let transit_skim_map = match &transit {
+    // When any transit route runs on road links, its in-vehicle times react
+    // to road congestion, so the transit skim is recomputed each feedback
+    // iteration from the congested link costs. Otherwise the Spiess-Florian
+    // costs are flow-independent and the skim is computed once and reused.
+    let transit_congested = transit
+        .as_ref()
+        .is_some_and(|t| t.network.routes.iter().any(|r| r.segment_links.is_some()));
+    // Free-flow road link times, used to scale transit segment times by the
+    // road congestion factor (only when congested transit is active).
+    let ff_link_time: HashMap<LinkID, f64> = if transit_congested {
+        (0..igraph.num_links)
+            .map(|i| (igraph.link_id(i), igraph.link_ff_time[i]))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    // The transit network with congested in-vehicle times, rebuilt each
+    // iteration; `None` until the first road assignment (or when transit
+    // runs on its own right-of-way and never congests).
+    let mut congested_transit_net: Option<TransitNetwork> = None;
+    // Transit skim, recomputed each iteration when congested transit is on.
+    let mut transit_skim_map = match &transit {
         Some(t) => Some(transit_skim_with_options(t.network, &zone_ids, &t.options)?),
         None => None,
     };
@@ -464,6 +481,17 @@ pub fn run_four_step_model(
             }
         }
 
+        // Recompute the transit skim from the congested road times: buses on
+        // those links are slowed, shifting the transit level of service.
+        // Runs every iteration - the updated skim feeds the next mode choice,
+        // and the congested network is used for the final transit assignment.
+        if transit_congested && let Some(t) = &transit {
+            let net =
+                congest_transit_network(t.network, &ff_link_time, &assignment_result.link_costs);
+            transit_skim_map = Some(transit_skim_with_options(&net, &zone_ids, &t.options)?);
+            congested_transit_net = Some(net);
+        }
+
         // If this is the last iteration, return results
         if fb_iter + 1 == max_feedback {
             // Assign the final transit demand with optimal strategies. Done
@@ -490,8 +518,10 @@ pub fn run_four_step_model(
                     }
                     if transit_od.total() > 0.0 {
                         let step_start = Instant::now();
-                        let result =
-                            assign_transit_with_options(t.network, &transit_od, &t.options)?;
+                        // Use the congested transit network if it was built
+                        // (transit runs on roads), else the free-flow one.
+                        let net = congested_transit_net.as_ref().unwrap_or(t.network);
+                        let result = assign_transit_with_options(net, &transit_od, &t.options)?;
                         t_assignment += step_start.elapsed();
                         Some(result)
                     } else {
@@ -1054,5 +1084,91 @@ mod tests {
         let base_101 = base.assignment.link_costs[&101];
         let loaded_101 = loaded.assignment.link_costs[&101];
         assert!((base_101 - loaded_101).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipeline_road_congestion_slows_transit() {
+        // Link 100 has a low capacity, so the auto demand congests it. A bus
+        // that runs on link 100 (segment_links) is slowed by that congestion:
+        // its in-vehicle time, and hence the transit skim and od cost, exceed
+        // the free-flow value (6 wait + 10 ride = 16).
+        let mut net = Network::new();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(55.75, 37.62)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(55.76, 37.62)
+                .build(),
+        )
+        .unwrap();
+        // link 100 (1 -> 2): low capacity -> congests. link 101 (2 -> 1): normal.
+        net.add_link(
+            Link::new(100, 1, 2)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(150.0)
+                .with_lanes_num(1)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(101, 2, 1)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1800.0)
+                .with_lanes_num(2)
+                .build(),
+        )
+        .unwrap();
+        let zones = vec![
+            Zone::new(1)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+            Zone::new(2)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+        ];
+
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100]]),
+        );
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &ModelConfig::new()
+                .with_max_iterations(30)
+                .with_feedback_iterations(2)
+                .build(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: None,
+                analysis_period: None,
+            }),
+            None,
+        )
+        .unwrap();
+
+        let transit = result.transit.expect("transit assigned");
+        // Congested in-vehicle time pushes the 1 -> 2 cost above free-flow 16.
+        assert!(
+            transit.od_costs[&(1, 2)] > 16.0,
+            "congested transit cost {} should exceed free-flow 16",
+            transit.od_costs[&(1, 2)]
+        );
     }
 }
