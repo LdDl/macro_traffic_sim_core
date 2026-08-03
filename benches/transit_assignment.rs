@@ -2,7 +2,8 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
 use macro_traffic_sim_core::transit::{
-    TransitNetwork, TransitRoute, assign_transit, assign_transit_par,
+    PreparedTransitNetwork, TransitAssignmentOptions, TransitNetwork, TransitRoute, assign_transit,
+    assign_transit_par,
 };
 
 fn build_grid(rows: i64, cols: i64) -> (TransitNetwork, DenseOdMatrix) {
@@ -43,11 +44,18 @@ fn bench_assign_transit(c: &mut Criterion) {
     for &(rows, cols) in &[(8i64, 8i64), (12, 12)] {
         let (network, od) = build_grid(rows, cols);
         let size = format!("{}x{}", rows, cols);
+        // Rebuilds the route graph on every call (one-shot / per-request).
         group.bench_function(BenchmarkId::new("serial", &size), |b| {
             b.iter(|| assign_transit(&network, &od).unwrap());
         });
         group.bench_function(BenchmarkId::new("parallel", &size), |b| {
             b.iter(|| assign_transit_par(&network, &od).unwrap());
+        });
+        // Graph interned once, reused across calls (the service scenario).
+        let prepared =
+            PreparedTransitNetwork::new(&network, &TransitAssignmentOptions::default()).unwrap();
+        group.bench_function(BenchmarkId::new("prepared", &size), |b| {
+            b.iter(|| prepared.assign(&od).unwrap());
         });
     }
     group.finish();

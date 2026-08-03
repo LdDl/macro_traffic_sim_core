@@ -570,27 +570,168 @@ pub fn assign_transit_with_options(
     od: &dyn OdMatrix,
     options: &TransitAssignmentOptions,
 ) -> Result<TransitAssignmentResult, TransitError> {
-    network.validate()?;
-    validate_options(options)?;
-    let graph = expand_route_graph(network, options);
+    PreparedTransitNetwork::new(network, options)?.assign(od)
+}
 
-    // Intern the expanded route graph once, then assign every destination
-    // through a reused workspace instead of re-interning it per destination.
-    let arena = Graph::new(&graph.links, &graph.nodes);
-    let zone_ids = od.zone_ids().to_vec();
+/// A transit network whose route graph is already expanded and interned, ready
+/// to assign many OD matrices without rebuilding it.
+///
+/// [`assign_transit`] rebuilds the route graph and the interned solver graph on
+/// every call. When the network and options are fixed and only the OD changes
+/// between calls - the typical shape of a REST / gRPC service where the
+/// timetable is loaded once and each request carries a different demand - build
+/// this once and reuse it: the per-request route-graph expansion and string
+/// interning disappear, leaving only the solve.
+///
+/// It is immutable after construction and `Sync`, so wrap it in an `Arc` and
+/// share it across request threads; each [`assign`](Self::assign) call
+/// allocates its own scratch, so concurrent calls do not contend. Rebuild it
+/// when the network or the [`TransitAssignmentOptions`] change.
+///
+/// # Example
+///
+/// ```
+/// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
+/// use macro_traffic_sim_core::transit::{
+///     PreparedTransitNetwork, TransitAssignmentOptions, TransitNetwork, TransitRoute,
+/// };
+///
+/// let mut network = TransitNetwork::new();
+/// network.add_route(TransitRoute::new("L1", vec![1, 4], vec![25.0], 6.0));
+/// network.add_route(TransitRoute::new("L2", vec![1, 2, 3], vec![7.0, 6.0], 6.0));
+/// network.add_route(TransitRoute::new("L3", vec![2, 3, 4], vec![4.0, 4.0], 15.0));
+/// network.add_route(TransitRoute::new("L4", vec![3, 4], vec![10.0], 3.0));
+///
+/// // Expand and intern once...
+/// let prepared =
+///     PreparedTransitNetwork::new(&network, &TransitAssignmentOptions::default()).unwrap();
+///
+/// // ...then assign as many ODs as you like against it.
+/// let mut od = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+/// od.set(1, 4, 1.0);
+/// let result = prepared.assign(&od).unwrap();
+/// assert!((result.od_costs[&(1, 4)] - 27.75).abs() < 1e-9);
+/// ```
+pub struct PreparedTransitNetwork {
+    graph: RouteGraph,
+    arena: Graph,
+}
 
-    let mut sink = DestSink::new(&arena, graph.links.len());
-    for &destination in &zone_ids {
-        sink.assign_destination(&graph, &arena, od, &zone_ids, destination)?;
+impl PreparedTransitNetwork {
+    /// Validates the network and options, expands the route graph and interns
+    /// it once. Reuse the result across many [`assign`](Self::assign) calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `network` - the transit routes and walk links
+    /// * `options` - assignment options baked into the route graph (wait
+    ///   factor, penalties, dwell time)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TransitError`] if the network is structurally invalid or the
+    /// options are out of range.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
+    /// use macro_traffic_sim_core::transit::{
+    ///     PreparedTransitNetwork, TransitAssignmentOptions, TransitNetwork, TransitRoute,
+    /// };
+    ///
+    /// // One line, stops 1 -> 2: 10 minute ride, 5 minute headway.
+    /// let mut network = TransitNetwork::new();
+    /// network.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 5.0));
+    ///
+    /// // Expand and intern once; keep `prepared` around for every incoming OD.
+    /// let prepared =
+    ///     PreparedTransitNetwork::new(&network, &TransitAssignmentOptions::default()).unwrap();
+    ///
+    /// let mut od = DenseOdMatrix::new(vec![1, 2]);
+    /// od.set(1, 2, 100.0);
+    /// // wait_factor 1.0: 5 min expected wait + 10 min ride.
+    /// let result = prepared.assign(&od).unwrap();
+    /// assert!((result.od_costs[&(1, 2)] - 15.0).abs() < 1e-9);
+    /// ```
+    pub fn new(
+        network: &TransitNetwork,
+        options: &TransitAssignmentOptions,
+    ) -> Result<Self, TransitError> {
+        network.validate()?;
+        validate_options(options)?;
+        let graph = expand_route_graph(network, options);
+        let arena = Graph::new(&graph.links, &graph.nodes);
+        Ok(PreparedTransitNetwork { graph, arena })
     }
 
-    let DestSink {
-        volumes,
-        od_costs,
-        total_demand,
-        ..
-    } = sink;
-    Ok(finalize(&graph, &volumes, od_costs, total_demand))
+    /// Assigns one OD matrix against the prepared graph (single-threaded).
+    ///
+    /// Equivalent to [`assign_transit_with_options`] with the options this was
+    /// built with, but without rebuilding the graph. Safe to call concurrently
+    /// from many threads on a shared `&self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TransitError`] when a demand zone is not a stop, or an OD
+    /// pair with positive demand has no transit path.
+    pub fn assign(&self, od: &dyn OdMatrix) -> Result<TransitAssignmentResult, TransitError> {
+        let zone_ids = od.zone_ids().to_vec();
+        let mut sink = DestSink::new(&self.arena, self.graph.links.len());
+        for &destination in &zone_ids {
+            sink.assign_destination(&self.graph, &self.arena, od, &zone_ids, destination)?;
+        }
+        let DestSink {
+            volumes,
+            od_costs,
+            total_demand,
+            ..
+        } = sink;
+        Ok(finalize(&self.graph, &volumes, od_costs, total_demand))
+    }
+
+    /// Parallel (opt-in) counterpart of [`assign`](Self::assign): fans the
+    /// destinations out over rayon.
+    ///
+    /// See [`assign_transit_par_with_options`] for the concurrency caveat: in a
+    /// service, prefer sharing this prepared network across single-threaded
+    /// requests over calling this inside one request.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`assign`](Self::assign).
+    #[cfg(feature = "parallel")]
+    pub fn assign_par(&self, od: &dyn OdMatrix) -> Result<TransitAssignmentResult, TransitError> {
+        use rayon::prelude::*;
+
+        let zone_ids = od.zone_ids().to_vec();
+        let num_links = self.graph.links.len();
+
+        let merged = zone_ids
+            .par_iter()
+            .try_fold(
+                || DestSink::new(&self.arena, num_links),
+                |mut sink, &destination| {
+                    sink.assign_destination(&self.graph, &self.arena, od, &zone_ids, destination)?;
+                    Ok(sink)
+                },
+            )
+            .try_reduce(
+                || DestSink::new(&self.arena, num_links),
+                |mut a, b| {
+                    a.merge(b);
+                    Ok(a)
+                },
+            )?;
+
+        let DestSink {
+            volumes,
+            od_costs,
+            total_demand,
+            ..
+        } = merged;
+        Ok(finalize(&self.graph, &volumes, od_costs, total_demand))
+    }
 }
 
 /// Per-thread scratch and result accumulator for one interned route graph.
@@ -800,40 +941,7 @@ pub fn assign_transit_par_with_options(
     od: &dyn OdMatrix,
     options: &TransitAssignmentOptions,
 ) -> Result<TransitAssignmentResult, TransitError> {
-    use rayon::prelude::*;
-
-    network.validate()?;
-    validate_options(options)?;
-    let graph = expand_route_graph(network, options);
-
-    let arena = Graph::new(&graph.links, &graph.nodes);
-    let zone_ids = od.zone_ids().to_vec();
-    let num_links = graph.links.len();
-
-    let merged = zone_ids
-        .par_iter()
-        .try_fold(
-            || DestSink::new(&arena, num_links),
-            |mut sink, &destination| {
-                sink.assign_destination(&graph, &arena, od, &zone_ids, destination)?;
-                Ok(sink)
-            },
-        )
-        .try_reduce(
-            || DestSink::new(&arena, num_links),
-            |mut a, b| {
-                a.merge(b);
-                Ok(a)
-            },
-        )?;
-
-    let DestSink {
-        volumes,
-        od_costs,
-        total_demand,
-        ..
-    } = merged;
-    Ok(finalize(&graph, &volumes, od_costs, total_demand))
+    PreparedTransitNetwork::new(network, options)?.assign_par(od)
 }
 
 /// Computes the transit level-of-service (skim): the expected travel time
@@ -1530,6 +1638,42 @@ mod tests {
             assign_transit(&network, &od),
             Err(TransitError::UnknownStop { zone: 99 })
         ));
+    }
+
+    #[test]
+    fn test_prepared_is_send_sync() {
+        // A prepared network is meant to be shared across request threads via
+        // an Arc, which requires Send + Sync. This guards that guarantee.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PreparedTransitNetwork>();
+    }
+
+    #[test]
+    fn test_prepared_matches_oneshot_and_is_reusable() {
+        let network = paper_network();
+        let prepared =
+            PreparedTransitNetwork::new(&network, &TransitAssignmentOptions::default()).unwrap();
+
+        // Two different ODs assigned against the same prepared graph must each
+        // match the one-shot assign_transit, and the prepared network must be
+        // reusable (no state carried between calls).
+        let mut od_a = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od_a.set(1, 4, 1.0);
+        let mut od_b = DenseOdMatrix::new(vec![1, 2, 3, 4]);
+        od_b.set(2, 4, 1.0);
+        od_b.set(3, 4, 1.0);
+
+        for od in [&od_a, &od_b] {
+            let oneshot = assign_transit(&network, od).unwrap();
+            let reused = prepared.assign(od).unwrap();
+            assert_eq!(oneshot.od_costs, reused.od_costs);
+            assert_eq!(oneshot.link_volumes.len(), reused.link_volumes.len());
+            for (a, b) in oneshot.link_volumes.iter().zip(&reused.link_volumes) {
+                assert_eq!((a.kind, &a.route_id), (b.kind, &b.route_id));
+                assert!((a.volume - b.volume).abs() <= EPS);
+            }
+            assert!((oneshot.total_boardings - reused.total_boardings).abs() <= EPS);
+        }
     }
 
     #[cfg(feature = "parallel")]

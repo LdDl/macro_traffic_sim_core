@@ -107,8 +107,9 @@ pub mod road_interaction;
 pub mod route;
 
 pub use self::assignment::{
-    TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
-    assign_transit, assign_transit_with_options, transit_skim, transit_skim_with_options,
+    PreparedTransitNetwork, TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind,
+    TransitLinkVolume, assign_transit, assign_transit_with_options, transit_skim,
+    transit_skim_with_options,
 };
 #[cfg(feature = "parallel")]
 pub use self::assignment::{assign_transit_par, assign_transit_par_with_options};
