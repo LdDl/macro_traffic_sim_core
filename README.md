@@ -166,6 +166,8 @@ All examples build an in-memory network and run without external files.
 | [`transit_gtfs`](examples/transit_gtfs/) | Transit assignment from a GTFS feed linked via GMNS locations |
 | [`gtfs_patterns`](examples/gtfs_patterns/) | How GTFS trips are grouped into patterns (template trips, directions, short-turns, interpolation) |
 | [`multimodal`](examples/multimodal/) | Cars and public transit on one network: 4-step road pipeline + buses/tram over GMNS locations |
+| [`transit_crowding`](examples/transit_crowding/) | Crowding: two parallel lines, demand sweep to the tipping point where the small line runs out of seats |
+| [`transit_decea`](examples/transit_decea/) | Crowding on de Cea & Fernandez's (1993) Modified Network G (paper topology; Spiess solution + effective-frequency crowding) |
 
 ```sh
 cargo run --example simple_network
