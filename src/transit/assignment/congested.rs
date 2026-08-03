@@ -11,8 +11,7 @@
 //! This is the full-congested model of Cominetti and Correa (2001) together
 //! with the solution algorithm of Cepeda, Cominetti and Florian (2006)
 //! (Transportation Research Part B 40(6), 437-459, DOI:
-//! <https://doi.org/10.1016/j.trb.2005.05.006>), which is the algorithm
-//! behind EMME's capacitated transit assignment.
+//! <https://doi.org/10.1016/j.trb.2005.05.006>).
 //!
 //! ## The method
 //!

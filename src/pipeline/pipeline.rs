@@ -24,9 +24,9 @@ use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
 use crate::transit::{
-    CrowdingParams, TransitAssignmentOptions, TransitAssignmentResult, TransitNetwork,
-    assign_transit_crowded, assign_transit_with_options, congest_transit_network,
-    transit_road_preload, transit_skim_with_options,
+    CongestedParams, CrowdingParams, TransitAssignmentOptions, TransitAssignmentResult,
+    TransitNetwork, assign_transit_congested, assign_transit_crowded, assign_transit_with_options,
+    congest_transit_network, transit_road_preload, transit_skim_with_options,
 };
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
@@ -98,14 +98,22 @@ pub struct TransitInput<'a> {
     /// declare `segment_links` contribute; see
     /// [`transit_road_preload`](crate::transit::transit_road_preload).
     pub analysis_period: Option<f64>,
-    /// Crowding (congested transit) parameters, `None` to disable. When set,
-    /// the final transit demand is assigned with
+    /// Soft-capacity crowding parameters, `None` to disable. When set, the
+    /// final transit demand is assigned with
     /// [`assign_transit_crowded`](crate::transit::assign_transit_crowded)
     /// instead of the uncrowded solver: lines that carry passengers up to
     /// their per-vehicle `capacity` lose effective frequency and shed load
     /// onto less crowded alternatives. Only routes with a `capacity` set
-    /// crowd; the rest are unaffected.
+    /// crowd; the rest are unaffected. Ignored when `congested` is set.
     pub crowding: Option<CrowdingParams>,
+    /// Strict-capacity congested parameters (Cepeda-Cominetti-Florian 2006),
+    /// `None` to disable. When set, the final transit demand is assigned with
+    /// [`assign_transit_congested`](crate::transit::assign_transit_congested):
+    /// a line's effective frequency vanishes as it reaches capacity, so it
+    /// cannot be overloaded and excess demand spills onto other lines. Takes
+    /// precedence over `crowding` (a line is either soft- or strict-capacity,
+    /// not both). Only routes with a `capacity` set are congested.
+    pub congested: Option<CongestedParams>,
 }
 
 /// Result of the complete 4-step model pipeline.
@@ -539,13 +547,17 @@ pub fn run_four_step_model(
                         // Use the congested transit network if it was built
                         // (transit runs on roads), else the free-flow one.
                         let net = congested_transit_net.as_ref().unwrap_or(t.network);
-                        // Crowding, when enabled, wraps the solver in its
-                        // own outer averaging loop on the same network.
-                        let result = match &t.crowding {
-                            Some(crowding) => {
-                                assign_transit_crowded(net, &transit_od, &t.options, crowding)?
-                            }
-                            None => assign_transit_with_options(net, &transit_od, &t.options)?,
+                        // Crowding / strict capacity, when enabled, wrap the
+                        // solver in an outer averaging loop on the same network.
+                        // Strict capacity (congested) takes precedence over the
+                        // soft crowding.
+                        let result = if let Some(congested) = &t.congested {
+                            assign_transit_congested(net, &transit_od, &t.options, congested)?
+                                .assignment
+                        } else if let Some(crowding) = &t.crowding {
+                            assign_transit_crowded(net, &transit_od, &t.options, crowding)?
+                        } else {
+                            assign_transit_with_options(net, &transit_od, &t.options)?
                         };
                         t_assignment += step_start.elapsed();
                         Some(result)
@@ -959,6 +971,7 @@ mod tests {
                 fixed_od: None,
                 analysis_period: None,
                 crowding: None,
+                congested: None,
             }),
             None,
         )
@@ -976,6 +989,48 @@ mod tests {
         // so all transit demand is on 1 -> 2).
         assert!(transit.total_boardings > 0.0);
         assert!((transit.od_costs[&(1, 2)] - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipeline_congested_respects_capacity() {
+        let (net, zones) = two_zone_setup();
+        // Two parallel lines 1 -> 2; "Small" is capacity limited.
+        let mut transit_net = TransitNetwork::new();
+        transit_net
+            .add_route(TransitRoute::new("Big", vec![1, 2], vec![10.0], 6.0).with_capacity(1000.0));
+        transit_net
+            .add_route(TransitRoute::new("Small", vec![1, 2], vec![10.0], 6.0).with_capacity(30.0));
+
+        // 500 captive riders on 1 -> 2 bind the small line's capacity.
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 500.0);
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+                analysis_period: None,
+                crowding: None,
+                congested: Some(CongestedParams::new(60.0)),
+            }),
+            None,
+        )
+        .unwrap();
+
+        let transit = result.transit.expect("transit result present");
+        let big = transit.route_boardings["Big"];
+        let small = transit.route_boardings["Small"];
+        // Strict capacity: the small line stays below its (60/6)*30 = 300
+        // line capacity and carries less than the roomy big line.
+        assert!(small < 300.0, "small {} exceeds capacity", small);
+        assert!(big > small, "big {} should exceed small {}", big, small);
     }
 
     #[test]
@@ -998,6 +1053,7 @@ mod tests {
                 fixed_od: None,
                 analysis_period: None,
                 crowding: None,
+                congested: None,
             }),
             None,
         )
@@ -1020,6 +1076,7 @@ mod tests {
                 fixed_od: Some(&fixed),
                 analysis_period: None,
                 crowding: None,
+                congested: None,
             }),
             None,
         )
@@ -1053,6 +1110,7 @@ mod tests {
                 fixed_od: Some(&fixed),
                 analysis_period: None,
                 crowding: None,
+                congested: None,
             }),
             None,
         )
@@ -1091,6 +1149,7 @@ mod tests {
                     fixed_od: None,
                     analysis_period,
                     crowding: None,
+                    congested: None,
                 }),
                 None,
             )
@@ -1189,6 +1248,7 @@ mod tests {
                 fixed_od: None,
                 analysis_period: None,
                 crowding: None,
+                congested: None,
             }),
             None,
         )

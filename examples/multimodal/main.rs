@@ -131,6 +131,8 @@ fn main() {
             // up (its per-vehicle capacity is set below), loses effective
             // frequency, and sheds riders onto the west tram and the express.
             crowding: Some(CrowdingParams::new(60.0)),
+            // Soft crowding here, not strict capacity.
+            congested: None,
         }),
         None,
     )

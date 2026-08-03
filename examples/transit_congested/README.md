@@ -1,10 +1,10 @@
 # transit_congested
 
 Strict-capacity congested transit assignment (Cepeda, Cominetti and Florian,
-2006), reproducing the paper's own worked example (Section 4.1.1). This is the
-rigorous congested equilibrium behind EMME's capacitated transit assignment: a
-line cannot be loaded beyond the capacity of its vehicles, and a computable gap
-function certifies the distance to equilibrium.
+2006), reproducing the paper's own worked example (Section 4.1.1). This is a
+rigorous congested equilibrium: a line cannot be loaded beyond the capacity of
+its vehicles, and a computable gap function certifies the distance to
+equilibrium.
 
 ```
 cargo run --example transit_congested

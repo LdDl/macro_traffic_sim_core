@@ -287,6 +287,8 @@ let result = run_four_step_model(
         fixed_od: None,
         analysis_period: Some(60.0),
         crowding: Some(CrowdingParams::new(60.0)),
+        // strict capacity instead: congested: Some(CongestedParams::new(60.0))
+        congested: None,
     }),
     None,
 )?;
