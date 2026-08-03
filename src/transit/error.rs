@@ -28,6 +28,8 @@ pub enum TransitError {
     InvalidConnectorParams { reason: &'static str },
     /// The analysis period is not strictly positive.
     InvalidAnalysisPeriod { value: f64 },
+    /// A route capacity is not strictly positive.
+    InvalidCapacity { route_id: String, capacity: f64 },
     /// Two routes share the same id.
     DuplicateRouteId { route_id: String },
     /// An OD zone with demand is not a stop of any route or walk link.
@@ -85,6 +87,13 @@ impl fmt::Display for TransitError {
                     f,
                     "analysis period must be strictly positive, got {}",
                     value
+                )
+            }
+            TransitError::InvalidCapacity { route_id, capacity } => {
+                write!(
+                    f,
+                    "route '{}' has non-positive capacity {}",
+                    route_id, capacity
                 )
             }
             TransitError::DuplicateRouteId { route_id } => {
