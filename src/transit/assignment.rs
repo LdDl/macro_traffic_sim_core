@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hyperpaths_rs::{Link, compute_sf, find_optimal_strategy};
+use hyperpaths_rs::{Graph, Link, find_optimal_strategy};
 
 use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
@@ -574,6 +574,13 @@ pub fn assign_transit_with_options(
     validate_options(options)?;
     let graph = expand_route_graph(network, options);
 
+    // Intern the expanded route graph once, then assign every destination
+    // through a reused workspace instead of re-interning it per destination.
+    let arena = Graph::new(&graph.links, &graph.nodes);
+    let mut workspace = arena.new_workspace();
+    let mut demand_col: Vec<f64> = vec![0.0; arena.num_nodes()];
+    let mut origin_ids: Vec<usize> = Vec::new();
+
     let mut volumes: Vec<f64> = vec![0.0; graph.links.len()];
     let mut od_costs: HashMap<(i64, i64), f64> = HashMap::new();
     let mut total_demand = 0.0;
@@ -604,24 +611,24 @@ pub fn assign_transit_with_options(
             }
         }
 
-        let destination_name = stop_name(destination);
-        let mut trips: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        let dest_id = arena
+            .node_index(&stop_name(destination))
+            .ok_or(TransitError::UnknownStop { zone: destination })?;
+
+        // Seed the reused demand column, remembering which entries to clear
+        origin_ids.clear();
         for &(origin, demand) in &origins {
-            trips
-                .entry(stop_name(origin))
-                .or_default()
-                .insert(destination_name.clone(), demand);
+            let origin_id = arena
+                .node_index(&stop_name(origin))
+                .ok_or(TransitError::UnknownStop { zone: origin })?;
+            demand_col[origin_id] = demand;
+            origin_ids.push(origin_id);
         }
 
-        let result = compute_sf(&graph.links, &graph.nodes, &destination_name, &trips);
+        let result = workspace.assign(dest_id, &demand_col);
 
-        for &(origin, _) in &origins {
-            let label = result
-                .strategy
-                .labels
-                .get(&stop_name(origin))
-                .copied()
-                .unwrap_or(f64::INFINITY);
+        for (&(origin, demand), &origin_id) in origins.iter().zip(&origin_ids) {
+            let label = result.labels[origin_id];
             if !label.is_finite() {
                 return Err(TransitError::Unreachable {
                     origin,
@@ -629,20 +636,17 @@ pub fn assign_transit_with_options(
                 });
             }
             od_costs.insert((origin, destination), label);
-        }
-        for &(_, demand) in &origins {
             total_demand += demand;
         }
 
-        for (from_name, to_map) in &result.volumes.links {
-            for (to_name, volume) in to_map {
-                if *volume == 0.0 {
-                    continue;
-                }
-                if let Some(&idx) = graph.index.get(&(from_name.clone(), to_name.clone())) {
-                    volumes[idx] += volume;
-                }
-            }
+        // Arena link indices match graph.links / graph.meta order.
+        for (idx, &volume) in result.link_vol.iter().enumerate() {
+            volumes[idx] += volume;
+        }
+
+        // Reset only the touched entries so the column is reusable
+        for &origin_id in &origin_ids {
+            demand_col[origin_id] = 0.0;
         }
     }
 
