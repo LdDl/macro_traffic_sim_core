@@ -40,7 +40,9 @@
 //! f_eff = f / (1 + (beta_l * f / alpha) * (load / K)^n)
 //! ```
 //!
-//! which is exactly the [`crowd_network`] transform used here. `K = f * kappa`
+//! which is exactly the effective-frequency transform used here: each
+//! capacitated line's boarding headway is multiplied by the crowding factor
+//! `1 + alpha * (load / K)^beta`. `K = f * kappa`
 //! is the line capacity per period (`kappa` the per-vehicle `capacity`); our
 //! `CrowdingParams::alpha` bundles the constant `beta_l * f / alpha`, and our
 //! `beta` is the BPR exponent `n`.
@@ -74,10 +76,13 @@
 
 use std::collections::HashMap;
 
-use crate::od::OdMatrix;
-use crate::transit::assignment::{
-    TransitAssignmentOptions, TransitAssignmentResult, assign_transit_with_options,
+use hyperpaths_rs::Graph;
+
+use super::{
+    TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, assign_links,
+    build_stop_ids, expand_route_graph, validate_options,
 };
+use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
 use crate::transit::route::TransitNetwork;
 
@@ -133,42 +138,25 @@ impl CrowdingParams {
     }
 }
 
-/// Multiplies the headway of every capacitated line by its crowding factor
-/// `1 + alpha * (load / line_capacity)^beta`, so its effective frequency
-/// `f_eff = f / factor` drops with the load. Uncapacitated lines are left
-/// unchanged.
-fn crowd_network(
-    network: &TransitNetwork,
-    loads: &HashMap<String, f64>,
-    params: &CrowdingParams,
-) -> TransitNetwork {
-    let mut out = network.clone();
-    for route in out.routes.iter_mut() {
-        let Some(capacity) = route.capacity else {
-            continue;
-        };
-        let line_capacity = (params.analysis_period / route.headway) * capacity;
-        if line_capacity <= 0.0 {
-            continue;
-        }
-        let load = loads.get(&route.id).copied().unwrap_or(0.0);
-        let ratio = load / line_capacity;
-        let factor = 1.0 + params.alpha * ratio.powf(params.beta);
-        // Effective frequency f_eff = f / factor  <=>  effective headway =
-        // headway * factor (waiting rises, line-choice share falls).
-        route.headway *= factor;
-    }
-    out
+/// The crowding factor `1 + alpha * (load / line_capacity)^beta` for a line, so
+/// its effective frequency `f_eff = f / factor` drops with the load. Applied as
+/// a multiplier on the line's boarding headway.
+fn crowd_factor(load: f64, line_capacity: f64, params: &CrowdingParams) -> f64 {
+    let ratio = load / line_capacity;
+    1.0 + params.alpha * ratio.powf(params.beta)
 }
 
 /// Runs the crowded (congested) transit assignment.
 ///
-/// Wraps [`assign_transit_with_options`] in an outer method-of-successive-
-/// averages loop: each iteration scales the capacitated lines' frequencies
-/// by their current load (via [`crowd_network`]), re-solves the unchanged
-/// optimal strategies problem, and averages the line loads. It converges to
-/// a state where each line's load is consistent with the effective
-/// frequency that load implies.
+/// Wraps the optimal-strategies assignment in an outer method-of-successive-
+/// averages loop: each iteration scales the capacitated lines' frequencies by
+/// their current load (a headway multiplier of [`crowd_factor`] on their
+/// boarding links), re-solves the unchanged optimal strategies problem, and
+/// averages the line loads. It converges to a state where each line's load is
+/// consistent with the effective frequency that load implies.
+///
+/// The route graph is expanded once; each iteration only patches the boarding
+/// headways and re-interns, never re-expanding the network.
 ///
 /// With no capacitated routes this is a single plain assignment.
 ///
@@ -224,27 +212,64 @@ pub fn assign_transit_crowded(
             value: crowding.analysis_period,
         });
     }
+    network.validate()?;
+    validate_options(options)?;
+
+    // Expand and intern once. Each outer iteration only patches the boarding
+    // headways of the capacitated lines and re-interns (the node set and link
+    // endpoints never change), instead of cloning the network and re-expanding.
+    let graph = expand_route_graph(network, options);
+    let arena = Graph::new(&graph.links, &graph.nodes);
+    let stop_ids = build_stop_ids(&graph, &arena);
 
     // No capacitated line -> plain assignment, no outer loop.
     let has_capacity = network.routes.iter().any(|r| r.capacity.is_some());
-    let mut result = assign_transit_with_options(network, od, options)?;
+    let mut result = assign_links(&graph, &arena, &stop_ids, od)?;
     if !has_capacity {
         return Ok(result);
     }
 
+    // Base boarding headways (before crowding) and, per capacitated boarding
+    // link, the route id used to look up its load and its line capacity.
+    let base_headway: Vec<f64> = graph.links.iter().map(|l| l.headway).collect();
+    let mut line_capacity: HashMap<&str, f64> = HashMap::new();
+    for route in &network.routes {
+        if let Some(capacity) = route.capacity {
+            let cap = (crowding.analysis_period / route.headway) * capacity;
+            if cap > 0.0 {
+                line_capacity.insert(route.id.as_str(), cap);
+            }
+        }
+    }
+    let mut board_links: Vec<(usize, String, f64)> = Vec::new();
+    for (idx, meta) in graph.meta.iter().enumerate() {
+        if meta.kind == TransitLinkKind::Boarding
+            && let Some(route_id) = &meta.route_id
+            && let Some(&cap) = line_capacity.get(route_id.as_str())
+        {
+            board_links.push((idx, route_id.clone(), cap));
+        }
+    }
+
+    let route_ids: Vec<String> = network.routes.iter().map(|r| r.id.clone()).collect();
     let mut loads = result.route_boardings.clone();
+    let mut links_eff = graph.links.clone();
     for n in 1..=crowding.max_iterations {
-        let effective = crowd_network(network, &loads, crowding);
-        result = assign_transit_with_options(&effective, od, options)?;
+        // Scale each capacitated boarding link's headway by its crowding factor.
+        for (idx, route_id, cap) in &board_links {
+            let load = loads.get(route_id).copied().unwrap_or(0.0);
+            links_eff[*idx].headway = base_headway[*idx] * crowd_factor(load, *cap, crowding);
+        }
+        let arena_eff = Graph::new(&links_eff, &graph.nodes);
+        result = assign_links(&graph, &arena_eff, &stop_ids, od)?;
 
         // Method of successive averages on the per-line loads, tracking the
         // largest change for the convergence test.
         let step = 1.0 / (n as f64 + 1.0);
         let mut max_change: f64 = 0.0;
-        let route_ids: Vec<String> = network.routes.iter().map(|r| r.id.clone()).collect();
-        for id in route_ids {
-            let solved = result.route_boardings.get(&id).copied().unwrap_or(0.0);
-            let current = loads.entry(id).or_insert(0.0);
+        for id in &route_ids {
+            let solved = result.route_boardings.get(id).copied().unwrap_or(0.0);
+            let current = loads.entry(id.clone()).or_insert(0.0);
             let updated = *current + step * (solved - *current);
             max_change = max_change.max((updated - *current).abs());
             *current = updated;

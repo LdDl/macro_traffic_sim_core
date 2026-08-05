@@ -101,7 +101,6 @@
 
 pub mod assignment;
 pub mod connectors;
-pub mod crowding;
 pub mod error;
 pub mod from_gtfs;
 pub mod road_interaction;
@@ -114,9 +113,12 @@ pub use self::assignment::{
     transit_skim_with_options,
 };
 #[cfg(feature = "parallel")]
-pub use self::assignment::{assign_transit_par, assign_transit_par_with_options};
+pub use self::assignment::{
+    assign_transit_par, assign_transit_par_with_options, transit_skim_par,
+    transit_skim_par_with_options,
+};
+pub use self::assignment::crowding::{CrowdingParams, assign_transit_crowded};
 pub use self::connectors::{AccessConnectorParams, generate_access_connectors};
-pub use self::crowding::{CrowdingParams, assign_transit_crowded};
 pub use self::error::TransitError;
 pub use self::from_gtfs::transit_network_from_gtfs;
 pub use self::road_interaction::{congest_transit_network, transit_road_preload};

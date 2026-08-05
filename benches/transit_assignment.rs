@@ -3,7 +3,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use macro_traffic_sim_core::od::{DenseOdMatrix, OdMatrix};
 use macro_traffic_sim_core::transit::{
     PreparedTransitNetwork, TransitAssignmentOptions, TransitNetwork, TransitRoute, assign_transit,
-    assign_transit_par,
+    assign_transit_par, transit_skim, transit_skim_par,
 };
 
 fn build_grid(rows: i64, cols: i64) -> (TransitNetwork, DenseOdMatrix) {
@@ -71,5 +71,21 @@ fn bench_assign_transit(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_assign_transit);
+fn bench_transit_skim(c: &mut Criterion) {
+    let mut group = c.benchmark_group("transit_skim");
+    for &(rows, cols) in &[(8i64, 8i64), (12, 12)] {
+        let (network, _) = build_grid(rows, cols);
+        let zones: Vec<i64> = (1..=rows * cols).collect();
+        let size = format!("{}x{}", rows, cols);
+        group.bench_function(BenchmarkId::new("serial", &size), |b| {
+            b.iter(|| transit_skim(&network, &zones).unwrap());
+        });
+        group.bench_function(BenchmarkId::new("parallel", &size), |b| {
+            b.iter(|| transit_skim_par(&network, &zones).unwrap());
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_assign_transit, bench_transit_skim);
 criterion_main!(benches);

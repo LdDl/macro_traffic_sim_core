@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hyperpaths_rs::{Graph, Link, Workspace, find_optimal_strategy};
+use hyperpaths_rs::{Graph, Link, Workspace};
 
 use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
@@ -37,6 +37,7 @@ use crate::transit::route::TransitNetwork;
 // is a child module so it can reuse this module's private route-graph
 // expansion and per-destination solve without exposing them in the API.
 pub mod congested;
+pub mod crowding;
 
 /// The role of a link in the expanded route graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,8 +122,6 @@ struct RouteGraph {
     nodes: HashSet<String>,
     /// Physical stops (zone candidates)
     stops: HashSet<i64>,
-    /// (from_name, to_name) -> index into links/meta
-    index: HashMap<(String, String), usize>,
 }
 
 fn stop_name(stop: i64) -> String {
@@ -170,7 +169,6 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
         meta: Vec::new(),
         nodes: HashSet::new(),
         stops: network.stop_ids(),
-        index: HashMap::new(),
     };
 
     for &stop in &graph.stops {
@@ -178,11 +176,8 @@ fn expand_route_graph(network: &TransitNetwork, options: &TransitAssignmentOptio
     }
 
     let push = |graph: &mut RouteGraph, link: Link, meta: LinkMeta| {
-        let key = (link.from_node.clone(), link.to_node.clone());
-        let idx = graph.links.len();
         graph.links.push(link);
         graph.meta.push(meta);
-        graph.index.insert(key, idx);
     };
 
     let wait_of = |headway: f64| options.wait_factor * headway;
@@ -615,6 +610,9 @@ pub fn assign_transit_with_options(
 pub struct PreparedTransitNetwork {
     graph: RouteGraph,
     arena: Graph,
+    /// Stop zone id -> arena node index, resolved once so the per-destination
+    /// loop needs no `stop_name` formatting or name lookups.
+    stop_ids: HashMap<i64, usize>,
 }
 
 impl PreparedTransitNetwork {
@@ -662,7 +660,12 @@ impl PreparedTransitNetwork {
         validate_options(options)?;
         let graph = expand_route_graph(network, options);
         let arena = Graph::new(&graph.links, &graph.nodes);
-        Ok(PreparedTransitNetwork { graph, arena })
+        let stop_ids = build_stop_ids(&graph, &arena);
+        Ok(PreparedTransitNetwork {
+            graph,
+            arena,
+            stop_ids,
+        })
     }
 
     /// Assigns one OD matrix against the prepared graph (single-threaded).
@@ -676,18 +679,78 @@ impl PreparedTransitNetwork {
     /// Returns a [`TransitError`] when a demand zone is not a stop, or an OD
     /// pair with positive demand has no transit path.
     pub fn assign(&self, od: &dyn OdMatrix) -> Result<TransitAssignmentResult, TransitError> {
-        let zone_ids = od.zone_ids().to_vec();
-        let mut sink = DestSink::new(&self.arena, self.graph.links.len());
-        for &destination in &zone_ids {
-            sink.assign_destination(&self.graph, &self.arena, od, &zone_ids, destination)?;
+        assign_links(&self.graph, &self.arena, &self.stop_ids, od)
+    }
+
+    /// Computes the transit skim (zone-to-zone expected travel time) against the
+    /// prepared graph, reusing the interned graph across destinations.
+    ///
+    /// Labels are flow-independent, so this is one phase-1 solve per destination
+    /// with no demand. Non-stop zones and unreachable pairs are omitted rather
+    /// than reported as infinite. Safe to call concurrently on a shared `&self`.
+    pub fn skim(&self, zones: &[i64]) -> HashMap<(i64, i64), f64> {
+        let mut workspace = self.arena.new_workspace();
+        let demand_col = vec![0.0; self.arena.num_nodes()];
+        let mut skim: HashMap<(i64, i64), f64> = HashMap::new();
+        for &destination in zones {
+            // A destination that is not a stop yields no attractive links, so
+            // every origin stays at infinity and no pair is recorded.
+            let Some(&dest_id) = self.stop_ids.get(&destination) else {
+                continue;
+            };
+            let result = workspace.assign(dest_id, &demand_col);
+            for &origin in zones {
+                if origin == destination {
+                    continue;
+                }
+                let Some(&origin_id) = self.stop_ids.get(&origin) else {
+                    continue;
+                };
+                let label = result.labels[origin_id];
+                if label.is_finite() {
+                    skim.insert((origin, destination), label);
+                }
+            }
         }
-        let DestSink {
-            volumes,
-            od_costs,
-            total_demand,
-            ..
-        } = sink;
-        Ok(finalize(&self.graph, &volumes, od_costs, total_demand))
+        skim
+    }
+
+    /// Parallel (opt-in) counterpart of [`skim`](Self::skim): fans the
+    /// destinations out over rayon with a per-worker workspace.
+    ///
+    /// See [`assign_transit_par_with_options`] for the concurrency caveat.
+    #[cfg(feature = "parallel")]
+    pub fn skim_par(&self, zones: &[i64]) -> HashMap<(i64, i64), f64> {
+        use rayon::prelude::*;
+
+        let num_nodes = self.arena.num_nodes();
+        zones
+            .par_iter()
+            .map_init(
+                || (self.arena.new_workspace(), vec![0.0f64; num_nodes]),
+                |(ws, demand_col), &destination| {
+                    let mut out: Vec<((i64, i64), f64)> = Vec::new();
+                    let Some(&dest_id) = self.stop_ids.get(&destination) else {
+                        return out;
+                    };
+                    let result = ws.assign(dest_id, demand_col);
+                    for &origin in zones {
+                        if origin == destination {
+                            continue;
+                        }
+                        let Some(&origin_id) = self.stop_ids.get(&origin) else {
+                            continue;
+                        };
+                        let label = result.labels[origin_id];
+                        if label.is_finite() {
+                            out.push(((origin, destination), label));
+                        }
+                    }
+                    out
+                },
+            )
+            .flatten_iter()
+            .collect()
     }
 
     /// Parallel (opt-in) counterpart of [`assign`](Self::assign): fans the
@@ -710,14 +773,14 @@ impl PreparedTransitNetwork {
         let merged = zone_ids
             .par_iter()
             .try_fold(
-                || DestSink::new(&self.arena, num_links),
+                || DestSink::new(&self.arena, &self.stop_ids, num_links),
                 |mut sink, &destination| {
-                    sink.assign_destination(&self.graph, &self.arena, od, &zone_ids, destination)?;
+                    sink.assign_destination(od, &zone_ids, destination)?;
                     Ok(sink)
                 },
             )
             .try_reduce(
-                || DestSink::new(&self.arena, num_links),
+                || DestSink::new(&self.arena, &self.stop_ids, num_links),
                 |mut a, b| {
                     a.merge(b);
                     Ok(a)
@@ -742,6 +805,7 @@ impl PreparedTransitNetwork {
 /// [`assign_transit_with_options`]; the parallel path keeps one per rayon
 /// worker and combines them with [`DestSink::merge`].
 struct DestSink<'g> {
+    stop_ids: &'g HashMap<i64, usize>,
     workspace: Workspace<'g>,
     demand_col: Vec<f64>,
     origins: Vec<(i64, f64)>,
@@ -752,8 +816,9 @@ struct DestSink<'g> {
 }
 
 impl<'g> DestSink<'g> {
-    fn new(arena: &'g Graph, num_links: usize) -> Self {
+    fn new(arena: &'g Graph, stop_ids: &'g HashMap<i64, usize>, num_links: usize) -> Self {
         DestSink {
+            stop_ids,
             workspace: arena.new_workspace(),
             demand_col: vec![0.0; arena.num_nodes()],
             origins: Vec::new(),
@@ -768,8 +833,6 @@ impl<'g> DestSink<'g> {
     /// demand column. A destination with no incoming demand is a no-op.
     fn assign_destination(
         &mut self,
-        graph: &RouteGraph,
-        arena: &Graph,
         od: &dyn OdMatrix,
         zone_ids: &[i64],
         destination: i64,
@@ -789,24 +852,19 @@ impl<'g> DestSink<'g> {
             return Ok(());
         }
 
-        if !graph.stops.contains(&destination) {
-            return Err(TransitError::UnknownStop { zone: destination });
-        }
-        for &(origin, _) in &self.origins {
-            if !graph.stops.contains(&origin) {
-                return Err(TransitError::UnknownStop { zone: origin });
-            }
-        }
-
-        let dest_id = arena
-            .node_index(&stop_name(destination))
+        // A zone missing from stop_ids is not a stop; this one lookup replaces
+        // the old stops-membership check plus a name-based index lookup.
+        let dest_id = *self
+            .stop_ids
+            .get(&destination)
             .ok_or(TransitError::UnknownStop { zone: destination })?;
 
         // Seed the reused demand column, remembering which entries to clear
         self.origin_ids.clear();
         for &(origin, demand) in &self.origins {
-            let origin_id = arena
-                .node_index(&stop_name(origin))
+            let origin_id = *self
+                .stop_ids
+                .get(&origin)
                 .ok_or(TransitError::UnknownStop { zone: origin })?;
             self.demand_col[origin_id] = demand;
             self.origin_ids.push(origin_id);
@@ -884,6 +942,43 @@ fn finalize(
         total_boardings,
         total_demand,
     }
+}
+
+/// Maps each stop zone id to its arena node index. Node interning depends only
+/// on the node set and link endpoints (not headways), so this mapping is valid
+/// for any graph built from the same expansion with patched link headways.
+fn build_stop_ids(graph: &RouteGraph, arena: &Graph) -> HashMap<i64, usize> {
+    let mut stop_ids = HashMap::with_capacity(graph.stops.len());
+    for &stop in &graph.stops {
+        if let Some(id) = arena.node_index(&stop_name(stop)) {
+            stop_ids.insert(stop, id);
+        }
+    }
+    stop_ids
+}
+
+/// Assigns an OD against an already-expanded route graph and its interned
+/// arena, reusing one workspace across destinations. Shared by the prepared
+/// API and the crowding outer loop (which re-interns per iteration because the
+/// boarding-link headways change, but never re-expands the route graph).
+fn assign_links(
+    graph: &RouteGraph,
+    arena: &Graph,
+    stop_ids: &HashMap<i64, usize>,
+    od: &dyn OdMatrix,
+) -> Result<TransitAssignmentResult, TransitError> {
+    let zone_ids = od.zone_ids().to_vec();
+    let mut sink = DestSink::new(arena, stop_ids, graph.links.len());
+    for &destination in &zone_ids {
+        sink.assign_destination(od, &zone_ids, destination)?;
+    }
+    let DestSink {
+        volumes,
+        od_costs,
+        total_demand,
+        ..
+    } = sink;
+    Ok(finalize(graph, &volumes, od_costs, total_demand))
 }
 
 /// Parallel (opt-in) variant of [`assign_transit`]: assigns destinations
@@ -1001,34 +1096,30 @@ pub fn transit_skim_with_options(
     zones: &[i64],
     options: &TransitAssignmentOptions,
 ) -> Result<HashMap<(i64, i64), f64>, TransitError> {
-    network.validate()?;
-    validate_options(options)?;
-    let graph = expand_route_graph(network, options);
+    Ok(PreparedTransitNetwork::new(network, options)?.skim(zones))
+}
 
-    let mut skim: HashMap<(i64, i64), f64> = HashMap::new();
-    for &destination in zones {
-        // A destination that is not a stop yields no attractive links, so
-        // every origin stays at infinity and no pair is recorded.
-        if !graph.stops.contains(&destination) {
-            continue;
-        }
-        let destination_name = stop_name(destination);
-        let strategy = find_optimal_strategy(&graph.links, &graph.nodes, &destination_name);
-        for &origin in zones {
-            if origin == destination {
-                continue;
-            }
-            let label = strategy
-                .labels
-                .get(&stop_name(origin))
-                .copied()
-                .unwrap_or(f64::INFINITY);
-            if label.is_finite() {
-                skim.insert((origin, destination), label);
-            }
-        }
-    }
-    Ok(skim)
+/// Parallel (opt-in) variant of [`transit_skim`]: computes the skim with the
+/// destinations fanned out over rayon, using default options.
+#[cfg(feature = "parallel")]
+pub fn transit_skim_par(
+    network: &TransitNetwork,
+    zones: &[i64],
+) -> Result<HashMap<(i64, i64), f64>, TransitError> {
+    transit_skim_par_with_options(network, zones, &TransitAssignmentOptions::default())
+}
+
+/// Parallel (opt-in) variant of [`transit_skim_with_options`].
+///
+/// See [`assign_transit_par_with_options`] for the concurrency caveat: in a
+/// service prefer parallelizing across requests over fanning out inside one.
+#[cfg(feature = "parallel")]
+pub fn transit_skim_par_with_options(
+    network: &TransitNetwork,
+    zones: &[i64],
+    options: &TransitAssignmentOptions,
+) -> Result<HashMap<(i64, i64), f64>, TransitError> {
+    Ok(PreparedTransitNetwork::new(network, options)?.skim_par(zones))
 }
 
 #[cfg(test)]

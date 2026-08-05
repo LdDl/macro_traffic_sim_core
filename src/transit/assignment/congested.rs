@@ -4,7 +4,7 @@
 //! flow on a line approaches the residual capacity of its vehicles, the
 //! line's effective frequency drops toward zero and its waiting time
 //! explodes, so passengers are pushed onto other lines or onto walking.
-//! Unlike the soft crowding of [`crowding`](crate::transit::crowding), the
+//! Unlike the soft crowding of [`crowding`](super::crowding), the
 //! capacity is a hard limit: a line cannot carry more than its vehicles
 //! hold.
 //!
@@ -61,7 +61,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hyperpaths_rs::{Link, compute_sf};
+use hyperpaths_rs::{Graph, Link};
 
 use crate::od::OdMatrix;
 use crate::transit::error::TransitError;
@@ -69,8 +69,8 @@ use crate::transit::route::TransitNetwork;
 // Private route-graph internals of the parent `assignment` module, reachable
 // here because this is a descendant module (no `pub` needed on them).
 use super::{
-    RouteGraph, TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind,
-    TransitLinkVolume, expand_route_graph, stop_name, validate_options,
+    TransitAssignmentOptions, TransitAssignmentResult, TransitLinkKind, TransitLinkVolume,
+    expand_route_graph, stop_name, validate_options,
 };
 
 /// Parameters of the congested (strict-capacity) transit assignment.
@@ -143,8 +143,13 @@ pub struct CongestedResult {
 /// Per-destination arc-flow vectors `v^d_a`, each indexed like the route
 /// graph's link list.
 type DestFlows = HashMap<i64, Vec<f64>>;
-/// Per-destination node labels `tau^d_i` (time-to-destination).
-type DestLabels = HashMap<i64, HashMap<String, f64>>;
+/// Per-destination origin labels `tau^d_i` (time-to-destination), keyed by the
+/// origin stop zone id (labels are only ever read for demand origins).
+type DestLabels = HashMap<i64, HashMap<i64, f64>>;
+/// One solved destination from the parallel sweep: (destination, arc flows
+/// indexed like the links, origin labels).
+#[cfg(feature = "parallel")]
+type SolvedDest = (i64, Vec<f64>, HashMap<i64, f64>);
 
 /// Effective waiting time on a boarding link under strict capacity.
 ///
@@ -173,49 +178,43 @@ fn effective_wait(
     (base_wait / g).min(max_wait)
 }
 
-/// Solves the shortest-hyperpath problem for one destination on the given
-/// links, returning the induced per-link flow (indexed like `graph.links`)
-/// and the node labels (time-to-destination).
-fn solve_destination(
-    links: &[Link],
-    nodes: &HashSet<String>,
-    index: &HashMap<(String, String), usize>,
-    destination: i64,
-    origins: &[(i64, f64)],
-) -> (Vec<f64>, HashMap<String, f64>) {
-    let dest_name = stop_name(destination);
-    let mut trips: HashMap<String, HashMap<String, f64>> = HashMap::new();
-    for &(origin, demand) in origins {
-        trips
-            .entry(stop_name(origin))
-            .or_default()
-            .insert(dest_name.clone(), demand);
-    }
-    let result = compute_sf(links, nodes, &dest_name, &trips);
-    let mut flow = vec![0.0; links.len()];
-    for (from_name, to_map) in &result.volumes.links {
-        for (to_name, volume) in to_map {
-            if let Some(&idx) = index.get(&(from_name.clone(), to_name.clone())) {
-                flow[idx] += volume;
-            }
-        }
-    }
-    (flow, result.strategy.labels)
-}
-
 /// Solves every destination on `links`, returning per-destination flow
-/// vectors and labels. Validates that demand zones are stops and that every
-/// origin can reach its destination.
+/// vectors and origin labels. Validates that demand zones are stops and that
+/// every origin can reach its destination.
+///
+/// The route graph is interned once here and reused across all destinations
+/// (one interning per call instead of one per destination). `stop_ids` maps a
+/// stop zone to its arena node index; it is invariant across the MSA
+/// iterations because only link headways change, not the node set or the link
+/// endpoints, so the interning order is identical every time.
 fn solve_all(
-    graph: &RouteGraph,
+    stop_ids: &HashMap<i64, usize>,
+    nodes: &HashSet<String>,
     links: &[Link],
     zone_ids: &[i64],
     od: &dyn OdMatrix,
 ) -> Result<(DestFlows, DestLabels), TransitError> {
+    let arena = Graph::new(links, nodes);
+    solve_all_on(&arena, stop_ids, zone_ids, od)
+}
+
+/// Sequential per-destination sweep over an interned graph.
+#[cfg(not(feature = "parallel"))]
+fn solve_all_on(
+    arena: &Graph,
+    stop_ids: &HashMap<i64, usize>,
+    zone_ids: &[i64],
+    od: &dyn OdMatrix,
+) -> Result<(DestFlows, DestLabels), TransitError> {
+    let mut ws = arena.new_workspace();
+    let mut demand_col = vec![0.0; arena.num_nodes()];
+    let mut origins: Vec<(i64, f64)> = Vec::new();
+    let mut origin_ids: Vec<usize> = Vec::new();
+
     let mut flows: DestFlows = HashMap::new();
     let mut labels: DestLabels = HashMap::new();
     for &destination in zone_ids {
-        let mut origins: Vec<(i64, f64)> = Vec::new();
+        origins.clear();
         for &origin in zone_ids {
             if origin == destination {
                 continue;
@@ -228,28 +227,120 @@ fn solve_all(
         if origins.is_empty() {
             continue;
         }
-        if !graph.stops.contains(&destination) {
-            return Err(TransitError::UnknownStop { zone: destination });
+
+        let dest_id = *stop_ids
+            .get(&destination)
+            .ok_or(TransitError::UnknownStop { zone: destination })?;
+        origin_ids.clear();
+        for &(origin, demand) in &origins {
+            let origin_id = *stop_ids
+                .get(&origin)
+                .ok_or(TransitError::UnknownStop { zone: origin })?;
+            demand_col[origin_id] = demand;
+            origin_ids.push(origin_id);
         }
-        for &(origin, _) in &origins {
-            if !graph.stops.contains(&origin) {
-                return Err(TransitError::UnknownStop { zone: origin });
-            }
-        }
-        let (flow, node_labels) =
-            solve_destination(links, &graph.nodes, &graph.index, destination, &origins);
-        for &(origin, _) in &origins {
-            let label = node_labels
-                .get(&stop_name(origin))
-                .copied()
-                .unwrap_or(f64::INFINITY);
+
+        let result = ws.assign(dest_id, &demand_col);
+
+        let mut node_labels: HashMap<i64, f64> = HashMap::with_capacity(origins.len());
+        for (&(origin, _), &origin_id) in origins.iter().zip(&origin_ids) {
+            let label = result.labels[origin_id];
             if !label.is_finite() {
                 return Err(TransitError::Unreachable {
                     origin,
                     destination,
                 });
             }
+            node_labels.insert(origin, label);
         }
+        let flow = result.link_vol.to_vec();
+
+        for &origin_id in &origin_ids {
+            demand_col[origin_id] = 0.0;
+        }
+        flows.insert(destination, flow);
+        labels.insert(destination, node_labels);
+    }
+    Ok((flows, labels))
+}
+
+/// Parallel per-destination sweep: destinations are independent, so they fan
+/// out over rayon with a per-worker workspace, then the per-destination flows
+/// and labels are gathered. Congested assignment is a batch computation, so
+/// this parallelizes under the `parallel` feature (like the road AON code)
+/// rather than through a separate opt-in entry point.
+#[cfg(feature = "parallel")]
+fn solve_all_on(
+    arena: &Graph,
+    stop_ids: &HashMap<i64, usize>,
+    zone_ids: &[i64],
+    od: &dyn OdMatrix,
+) -> Result<(DestFlows, DestLabels), TransitError> {
+    use rayon::prelude::*;
+
+    let num_nodes = arena.num_nodes();
+    let per: Result<Vec<Option<SolvedDest>>, TransitError> = zone_ids
+        .par_iter()
+        .map_init(
+            || (arena.new_workspace(), vec![0.0f64; num_nodes]),
+            |(ws, demand_col), &destination| {
+                let mut origins: Vec<(i64, f64)> = Vec::new();
+                for &origin in zone_ids {
+                    if origin == destination {
+                        continue;
+                    }
+                    let demand = od.get(origin, destination);
+                    if demand > 0.0 {
+                        origins.push((origin, demand));
+                    }
+                }
+                if origins.is_empty() {
+                    return Ok(None);
+                }
+
+                let dest_id = *stop_ids
+                    .get(&destination)
+                    .ok_or(TransitError::UnknownStop { zone: destination })?;
+                let mut origin_ids: Vec<usize> = Vec::with_capacity(origins.len());
+                for &(origin, demand) in &origins {
+                    let origin_id = *stop_ids
+                        .get(&origin)
+                        .ok_or(TransitError::UnknownStop { zone: origin })?;
+                    demand_col[origin_id] = demand;
+                    origin_ids.push(origin_id);
+                }
+
+                let result = ws.assign(dest_id, demand_col);
+
+                let mut node_labels: HashMap<i64, f64> = HashMap::with_capacity(origins.len());
+                let mut unreachable = None;
+                for (&(origin, _), &origin_id) in origins.iter().zip(&origin_ids) {
+                    let label = result.labels[origin_id];
+                    if !label.is_finite() {
+                        unreachable = Some(origin);
+                        break;
+                    }
+                    node_labels.insert(origin, label);
+                }
+                let flow = result.link_vol.to_vec();
+
+                for &origin_id in &origin_ids {
+                    demand_col[origin_id] = 0.0;
+                }
+                if let Some(origin) = unreachable {
+                    return Err(TransitError::Unreachable {
+                        origin,
+                        destination,
+                    });
+                }
+                Ok(Some((destination, flow, node_labels)))
+            },
+        )
+        .collect();
+
+    let mut flows: DestFlows = HashMap::new();
+    let mut labels: DestLabels = HashMap::new();
+    for (destination, flow, node_labels) in per?.into_iter().flatten() {
         flows.insert(destination, flow);
         labels.insert(destination, node_labels);
     }
@@ -298,7 +389,7 @@ fn compute_gap(
             }
             let demand = od.get(origin, destination);
             if demand > 0.0 {
-                let time = node_labels.get(&stop_name(origin)).copied().unwrap_or(0.0);
+                let time = node_labels.get(&origin).copied().unwrap_or(0.0);
                 term3 += demand * time;
                 min_cost += demand * time;
             }
@@ -387,6 +478,17 @@ pub fn assign_transit_congested(
     let n = graph.links.len();
     let zone_ids = od.zone_ids().to_vec();
 
+    // Stop zone -> arena node index, resolved once. Node interning depends only
+    // on the node set and link endpoints (not headways), so this mapping is
+    // valid for every per-iteration graph built from the effective links.
+    let arena_nodes = Graph::new(&graph.links, &graph.nodes);
+    let mut stop_ids: HashMap<i64, usize> = HashMap::with_capacity(graph.stops.len());
+    for &stop in &graph.stops {
+        if let Some(id) = arena_nodes.node_index(&stop_name(stop)) {
+            stop_ids.insert(stop, id);
+        }
+    }
+
     // Per-boarding-link congestion data: (line capacity mu*c, index of the
     // on-board riding link right after the stop). Only for capacitated routes.
     let mut riding_from: HashMap<&str, usize> = HashMap::new();
@@ -424,7 +526,7 @@ pub fn assign_transit_congested(
     let base_wait: Vec<f64> = graph.links.iter().map(|l| l.headway).collect();
 
     // Initial all-or-nothing assignment at the nominal frequencies.
-    let (mut v_dest, mut labels) = solve_all(&graph, &graph.links, &zone_ids, od)?;
+    let (mut v_dest, mut labels) = solve_all(&stop_ids, &graph.nodes, &graph.links, &zone_ids, od)?;
 
     let mut gap_history: Vec<f64> = Vec::new();
     let mut relative_gap = f64::INFINITY;
@@ -450,7 +552,7 @@ pub fn assign_transit_congested(
         }
 
         // Shortest hyperpaths at the frozen frequencies.
-        let (v_hat, new_labels) = solve_all(&graph, &links_eff, &zone_ids, od)?;
+        let (v_hat, new_labels) = solve_all(&stop_ids, &graph.nodes, &links_eff, &zone_ids, od)?;
         labels = new_labels;
 
         // Gap of the current flow under these frozen frequencies.
@@ -504,7 +606,7 @@ pub fn assign_transit_congested(
             }
             total_demand += demand;
             if let Some(node_labels) = labels.get(&destination)
-                && let Some(&time) = node_labels.get(&stop_name(origin))
+                && let Some(&time) = node_labels.get(&origin)
             {
                 od_costs.insert((origin, destination), time);
             }
