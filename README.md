@@ -16,36 +16,68 @@ forecasting:
    combined) controls distance sensitivity. Furness (IPF) balancing ensures
    row/column totals match productions and attractions.
 
-3. **Mode Choice** - splits the total OD matrix into per-mode matrices
-   (AUTO, BIKE, WALK) using a multinomial logit model with configurable
-   utility functions (time, distance, cost coefficients per mode).
+3. **Mode Choice** - splits the total OD matrix into per-mode matrices with a
+   multinomial logit model and configurable utilities (time, distance, cost
+   per mode). Modes are AUTO, BIKE, WALK, and optionally **TRANSIT** (public
+   transport). The transit alternative is fed by a transit level-of-service
+   skim, so how much demand rides transit is decided here, not fixed by hand.
 
-4. **Traffic Assignment** - loads the AUTO OD matrix onto the network to
-   find User Equilibrium link flows. Only AUTO is assigned because BIKE
-   and WALK do not contribute to road congestion. Four algorithms are available:
-   - **Frank-Wolfe** - convex combinations with golden section line search
-   - **MSA** - method of successive averages (step = 1/n)
-   - **Gradient Projection** - path-based with explicit path management
-   - **Diagonalization** - Gauss-Seidel relaxation for per-class VDFs (Dafermos, 1982)
+4. **Traffic Assignment** - loads the AUTO OD onto the road network for User
+   Equilibrium link flows (BIKE and WALK do not congest roads). Four
+   algorithms: **Frank-Wolfe**, **MSA**, **Gradient Projection**, and
+   **Diagonalization** (per-class VDFs, Dafermos, 1982). The TRANSIT OD is
+   assigned separately with the **optimal strategies** algorithm (Spiess &
+   Florian, 1989) on the transit network.
 
 Steps 2-4 run inside a **feedback loop**: after each assignment the congested
-travel times update the skim matrix, which feeds back into distribution and
-mode choice. This captures the interaction between congestion and
+travel times update the skim, which feeds back into distribution and mode
+choice, capturing the interaction between congestion and
 route/destination/mode decisions.
+
+Road and transit are **two-way coupled** inside this loop: transit vehicles
+that run in mixed traffic add a background load to the roads they share with
+cars (so buses help congest the road), and that road congestion in turn
+raises the in-vehicle time of those transit segments (so traffic slows the
+buses). A slower, pricier transit then shifts mode choice back toward cars on
+the next iteration, and vice versa - the two modes reach a joint equilibrium.
 
 ```text
 Trip Generation
       |
       v
-+---> Trip Distribution  <-- skim (travel time)
++---> Trip Distribution  <-- skim (road + transit travel time)
 |           |
 |           v
-|     Mode Choice
-|           |
-|           v
-+---- Assignment -----> update skim from congested costs
+|     Mode Choice  (AUTO / BIKE / WALK / TRANSIT)
+|         |     \
+|         v      v
+|   Road Assign   Transit Assign (optimal strategies)
+|    ^   |              |
+|    |   +-- buses preload the road (PCU)
+|    +------ road congestion slows transit segments
++---- update skims from congested costs
       (repeat N times)
 ```
+
+## Public transit
+
+Alongside the road model the library assigns frequency-based public transit with the optimal strategies algorithm (Spiess & Florian, 1989).
+
+Passengers do not pick a single line: at each stop they choose a set of attractive lines and board whichever vehicle comes first, so flow splits between competing lines in proportion to their frequencies.
+
+- **Lines over stops.** - a `TransitRoute` is an ordered list of stops with per-segment travel times and a headway. Stops are GMNS `location` records - points pinned to road links (`link_id` + offset). The road graph is never split or modified; the `location` is the single bridge between the two layers, and no map matching is performed.
+- **Zone access.** - zone centroids join as pseudo-stops via walk links to several candidate stops; the algorithm itself picks the access stop  per destination (no nearest-stop heuristic).
+- **GTFS input.** - a frequency-based GTFS Schedule dataset is converted into routes: trips are grouped into patterns by stop sequence headways come from `frequencies.txt`, `stop_times` provide relative travel profiles.
+
+The GTFS data model lives in the [gtfs-rs](https://crates.io/crates/gtfs-rs) crate; the assignment is solved by [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs).
+
+Transit is fully wired into the 4-step pipeline: mode choice derives the transit demand from a transit skim (or you can supply a fixed exogenous transit OD, e.g. captive riders), and inside the feedback loop transit and road congest each other - a route can declare the road links it runs on, so its vehicles preload those links and its in-vehicle time follows their congestion (a route on its own right-of-way, like a metro, does neither). This frequency-based coupling follows De Cea & Fernandez (1993) - road congestion is an exogenous input to the in-vehicle time - and the two-mode equilibrium of Florian & Spiess (1983). Transit can also be assigned standalone with a manually supplied OD.
+
+**Crowding (soft capacity).** Give a `TransitRoute` a per-vehicle `capacity` and the assignment turns on passenger crowding: as the flow a line attracts approaches its capacity, its effective frequency drops and its waiting time rises, so it sheds riders onto less crowded alternatives. This is De Cea & Fernandez's (1993) congested-transit model, where a stop is a queue and "as the number of passengers trying to use a given service approaches its capacity, waiting times increase". Rather than a hard cap they use a BPR-like convex volume-delay term, so the line's effective frequency becomes `f_eff = f / (1 + alpha * (load/capacity)^beta)` (their effective frequency, Eq. 16) - a soft cap that a line can overrun under very heavy demand. Cominetti & Correa (2001) put this on a rigorous footing: waiting times "obey an inverse additive law of the form `1/W_s(v) = sum 1/W_i(v)`", i.e. the Spiess-Florian combined frequency with a flow-dependent `f_i(v)`. So crowding is an outer method-of-successive-averages loop that rescales each line's frequency by its load and re-runs the unchanged optimal-strategies solver - the hyperpaths solver never sees the flow dependence. Uncapacitated routes are unaffected. See `assign_transit_crowded` / `CrowdingParams`, or the pipeline's `TransitInput.crowding`.
+
+**Strict capacity (Cepeda-Cominetti-Florian).** `assign_transit_congested` / `CongestedParams` is the rigorous congested equilibrium of Cepeda, Cominetti & Florian (2006). It uses the strict effective frequency `f_a = mu * (1 - (v_a / (mu*c - v'_a + v_a))^beta)`, which vanishes as the on-board flow reaches the line capacity, so a line cannot be overloaded: excess demand is forced onto other lines or onto walking, and the method reveals corridors that lack capacity. Convergence is measured by their computable gap function `G(v)` (Theorem 3.2), zero exactly at equilibrium, so the outer method-of-successive-averages loop has a rigorous stopping rule. Like crowding it wraps the unchanged optimal-strategies solver, generalizing the plain Spiess-Florian model (which is its uncongested special case). Available standalone or in the pipeline via `TransitInput.congested` (which takes precedence over `TransitInput.crowding`). The `transit_congested` example reproduces the paper's own worked example.
+
+See the `transit`, `transit_gtfs`, `gtfs_patterns`, `multimodal`, `transit_crowding` and `transit_congested` examples.
 
 ## Network format
 
@@ -58,6 +90,8 @@ The library works on a **mesoscopic** (meso) network based on the
   exists only if the turn is allowed. This encodes turn restrictions directly
   in the graph topology - routing algorithms respect them automatically
   without any extra logic.
+- **Locations** - GMNS `location` records: points along a link (`link_id` +
+  offset), optionally carrying a `gtfs_stop_id`. Used as transit stops; they annotate the road graph without splitting it.
 
 The library does not include I/O or CSV parsing. You build the `Network`
 in code or write your own loader (see the examples).
@@ -68,7 +102,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-macro_traffic_sim_core = "0.1.1"
+macro_traffic_sim_core = "0.3.0"
 ```
 
 Minimal usage:
@@ -130,11 +164,21 @@ All examples build an in-memory network and run without external files.
 | [`diagonalization`](examples/diagonalization/) | Per-class VDFs (asymmetric costs), direct assignment call |
 | [`warm_start_test`](examples/warm_start_test/) | Warm start: reuse previous iteration flows |
 | [`lua_vdf`](examples/lua_vdf/) | Lua-scripted VDF with diagonalization (requires `lua` feature) |
+| [`transit`](examples/transit/) | Transit assignment with optimal strategies (Spiess & Florian, 1989) |
+| [`transit_gtfs`](examples/transit_gtfs/) | Transit assignment from a GTFS feed linked via GMNS locations |
+| [`gtfs_patterns`](examples/gtfs_patterns/) | How GTFS trips are grouped into patterns (template trips, directions, short-turns, interpolation) |
+| [`multimodal`](examples/multimodal/) | Cars and public transit on one network: 4-step road pipeline + buses/tram over GMNS locations |
+| [`transit_crowding`](examples/transit_crowding/) | Crowding: two parallel lines, demand sweep to the tipping point where the small line runs out of seats |
+| [`transit_congested`](examples/transit_congested/) | Strict-capacity congested equilibrium (Cepeda-Cominetti-Florian 2006), reproducing the paper's worked example |
 
 ```sh
 cargo run --example simple_network
 cargo run --example diagonalization
 cargo run --example lua_vdf --features lua
+cargo run --example transit
+cargo run --example transit_gtfs
+cargo run --example gtfs_patterns
+cargo run --example multimodal
 ```
 
 ## Configuration
@@ -248,6 +292,7 @@ macro_traffic_sim_core
     types               - NodeID, LinkID, ZoneID, AgentType, LinkType and so on.
     defaults            - default speed/capacity/lanes by link type
     error               - GraphError
+    location/           - GMNS location: point on a link (link_id + offset), the road-transit bridge
     meso/               - mesoscopic network
       node              - Node (intersection/mid-link point)
       link              - Link (road segment or connection/turn)
@@ -255,6 +300,15 @@ macro_traffic_sim_core
   mode_choice/          - multinomial logit mode split
   od/                   - OD matrices (dense and sparse)
   pipeline/             - 4-step model orchestrator
+  transit/              - frequency-based public transit (optimal strategies)
+    route               - TransitRoute, WalkLink, TransitNetwork data model
+    assignment          - route graph expansion, assign_transit, skims, PreparedTransitNetwork
+      congested         - strict-capacity congested equilibrium (Cepeda-Cominetti-Florian)
+      crowding          - soft-capacity crowding (De Cea-Fernandez / Cominetti-Correa)
+    connectors          - zone access connector generation from coordinates
+    road_interaction    - transit <-> road coupling (vehicle preload + congested times)
+    from_gtfs           - GTFS pattern reconstruction (frequencies + stop_times)
+    error               - TransitError
   trip_distribution/    - gravity model + Furness balancing + impedance
   trip_generation/      - regression and cross-classification generators
   verbose/              - structured logging (tracing-based)
@@ -264,6 +318,10 @@ macro_traffic_sim_core
 ## Parallel execution
 
 The `parallel` feature is ENABLED by default. It uses [rayon](https://docs.rs/rayon) to parallelize the most expensive steps: all-or-nothing assignment (Dijkstra per origin zone) and skim matrix computation.
+
+For transit, the route graph is *interned* once per call and every destination reuses one solver workspace (via [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs) v0.2.0), so `assign_transit`, `transit_skim` and the congested/crowding equilibria avoid re-interning per destination.
+
+> **Interning, in plain terms.** The graph's nodes are named by strings (`"stop_42"`, `"L3#2"`, a centroid id, ...). "Interning" walks over every name once and assigns each a dense integer index - `"stop_42" -> 0`, `"L3#2" -> 1`, and so on - so the hot loop reads plain arrays (`labels[0]`, `labels[1]`) instead of hashing strings on every lookup. It is the same idea as turning a paper address book into numbered slots. Building that numbering is the costly part; the win is doing it **once** and reusing it for all destinations, rather than rebuilding it for each one. `assign_transit` and `transit_skim` stay single-threaded by default; opt-in parallel variants `assign_transit_par` / `transit_skim_par` fan the destinations over rayon, and the congested sweep parallelizes under this feature. For services that assign many OD matrices against a fixed network, `PreparedTransitNetwork` interns the graph once and is shared across request threads behind an `Arc`.
 
 To disable and use single-threaded execution:
 
@@ -346,7 +404,68 @@ macro_traffic_sim_core = { version = "...", default-features = false }
     Australian Road Research, 21(3), 49-59.
     Akcelik VDF for signalized intersections.
 
-12. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+12. Spiess, H. and Florian, M. (1989) "Optimal strategies: A new assignment
+    model for transit networks",
+    Transportation Research Part B, 23(2), 83-102.
+    DOI: 10.1016/0191-2615(89)90034-9
+    Frequency-based transit assignment (the `transit` module).
+
+13. Dial, R.B. (1967) "Transit pathfinder algorithm",
+    Highway Research Record, 205, 67-85.
+
+14. Le Clercq, F. (1972) "A public transport assignment method",
+    Traffic Engineering and Control, 91-96.
+
+15. Chapleau, R. (1974) "Reseaux de transport en commun: Structure
+    informatique et affectation", PhD thesis, Departement d'informatique et
+    de recherche operationnelle, Universite de Montreal, Quebec.
+
+16. Rapp, M.H., Mattenberger, P., Piguet, S. and Robert-Grandpierre, A.
+    (1976) "Interactive graphic system for transit route optimization",
+    Transportation Research Record, 619.
+
+17. UMTA/FHWA (1977) "UTPS Reference Manual",
+    U.S. Department of Transportation.
+
+18. GTFS (General Transit Feed Specification), static reference.
+    https://gtfs.org/documentation/schedule/reference/
+    Source format for transit routes/frequencies (the `gtfs-rs` crate and
+    the `transit::from_gtfs` converter).
+
+19. go-gmns - Go implementation of basic data in GMNS. https://github.com/LdDl/go-gmns
+
+20. Florian, M. and Spiess, H. (1983) "On Binary Mode Choice/Assignment
+    Models",
+    Transportation Science, 17(1), 32-47.
+    DOI: 10.1287/trsc.17.1.32
+    Two-mode road+transit equilibrium (costs depend on both modes' flows,
+    solved by diagonalization) - basis of the road<->transit coupling.
+
+21. De Cea, J. and Fernandez, E. (1993) "Transit Assignment for Congested
+    Public Transport Systems: An Equilibrium Model",
+    Transportation Science, 27(2), 133-147.
+    DOI: 10.1287/trsc.27.2.133
+    Congested-transit model: route sections, road congestion as an exogenous
+    parameter for the in-vehicle time, and the effective-frequency crowding
+    (Eq. 16) - basis of the congested transit segment times and of the
+    crowding assignment.
+
+22. Cominetti, R. and Correa, J. (2001) "Common-Lines and Passenger
+    Assignment in Congested Transit Networks",
+    Transportation Science, 35(3), 250-267.
+    DOI: 10.1287/trsc.35.3.250.10154
+    Congested transit: crowding raises waiting via an inverse-additive law
+    on effective frequencies - basis of the crowding assignment
+    (`assign_transit_crowded`).
+
+23. Cepeda, M., Cominetti, R. and Florian, M. (2006) "A frequency-based
+    assignment model for congested transit networks with strict capacity
+    constraints: characterization and computation of equilibria",
+    Transportation Research Part B, 40(6), 437-459.
+    DOI: 10.1016/j.trb.2005.05.006
+    Strict-capacity congested equilibrium with a computable gap function,
+    solved by MSA over the Spiess-Florian solver - basis of the congested
+    assignment (`assign_transit_congested`).
 
 ## License
 

@@ -10,11 +10,14 @@
 //!    a gravity model with Furness (IPF) balancing. The impedance function
 //!    and a zone-to-zone travel time skim drive the distribution.
 //! 3. **Mode Choice** -- splits the total OD matrix into per-mode matrices
-//!    (AUTO, BIKE, WALK) via a multinomial logit model.
-//! 4. **Traffic Assignment** -- assigns the AUTO OD matrix to the meso
-//!    network using the configured method (Frank-Wolfe, MSA, or Gradient
-//!    Projection) to find User Equilibrium link volumes. Only AUTO is
-//!    assigned because BIKE and WALK do not contribute to road congestion.
+//!    (AUTO, BIKE, WALK, and optionally TRANSIT) via a multinomial logit
+//!    model. When a transit layer is supplied, the transit alternative is
+//!    fed by a transit level-of-service skim.
+//! 4. **Traffic Assignment** -- assigns the AUTO OD to the meso network
+//!    using the configured method (Frank-Wolfe, MSA, Gradient Projection,
+//!    or Diagonalization) to find User Equilibrium link volumes (BIKE and
+//!    WALK do not congest roads). The TRANSIT OD is assigned separately with
+//!    the optimal strategies algorithm on the transit network.
 //!
 //! ## Feedback loop
 //!
@@ -25,17 +28,27 @@
 //! trip distribution and mode choice. This captures the interaction
 //! between congestion and route/mode choice.
 //!
+//! Road and transit are two-way coupled inside the loop: transit vehicles in
+//! mixed traffic preload the road links they run on (helping congest them),
+//! and that road congestion raises the in-vehicle time of those transit
+//! segments, so the transit skim is recomputed each iteration. See
+//! [`TransitInput`] and [`crate::transit::road_interaction`].
+//!
 //! ```text
 //! Trip Generation
 //!       |
 //!       v
-//! +---> Trip Distribution  <-- skim (travel time)
+//! +---> Trip Distribution  <-- skim (road + transit travel time)
 //! |           |
 //! |           v
-//! |     Mode Choice
-//! |           |
-//! |           v
-//! +---- Assignment ------> update skim from congested costs
+//! |     Mode Choice  (AUTO / BIKE / WALK / TRANSIT)
+//! |         |      \
+//! |         v       v
+//! |   Road Assign    Transit Assign
+//! |    ^   |               |
+//! |    |   +-- buses preload the road
+//! |    +------ congestion slows transit
+//! +---- update skims from congested costs
 //!       (repeat N times)
 //! ```
 //!

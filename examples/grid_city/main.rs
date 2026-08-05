@@ -114,6 +114,7 @@ fn main() {
         &impedance,
         &logit,
         &config,
+        None,
         Some(&on_progress),
     )
     .expect("pipeline failed");

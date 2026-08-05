@@ -43,7 +43,7 @@ pub type MovementID = i64;
 /// Unique identifier for a zone.
 pub type ZoneID = i64;
 
-/// Agent type classification (no public transit).
+/// Agent type classification.
 ///
 /// # Examples
 ///
@@ -54,6 +54,7 @@ pub type ZoneID = i64;
 /// assert_eq!(AgentType::Bike.to_string(), "bike");
 /// assert_eq!(AgentType::Walk.to_string(), "walk");
 /// assert_eq!(AgentType::Truck.to_string(), "truck");
+/// assert_eq!(AgentType::Transit.to_string(), "transit");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentType {
@@ -62,6 +63,9 @@ pub enum AgentType {
     Bike,
     Walk,
     Truck,
+    /// Public transit (assigned with the optimal strategies algorithm,
+    /// not loaded onto the road network).
+    Transit,
 }
 
 impl fmt::Display for AgentType {
@@ -72,6 +76,7 @@ impl fmt::Display for AgentType {
             AgentType::Bike => "bike",
             AgentType::Walk => "walk",
             AgentType::Truck => "truck",
+            AgentType::Transit => "transit",
         };
         write!(f, "{}", s)
     }

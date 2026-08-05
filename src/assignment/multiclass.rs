@@ -474,8 +474,9 @@ fn eval_beckmann_at_step(
     lambda: f64,
 ) -> Result<f64, AssignmentError> {
     let mut objective = 0.0;
+    let background = graph.link_background_pcu();
     for i in 0..graph.num_links {
-        let vol = current_pcu[i] + lambda * (aux_pcu[i] - current_pcu[i]);
+        let vol = current_pcu[i] + lambda * (aux_pcu[i] - current_pcu[i]) + background[i];
         objective += vdf.integral(graph.link_ff_time[i], vol, graph.link_capacity[i])?;
     }
     Ok(objective)

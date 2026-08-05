@@ -1,6 +1,6 @@
 [package]
 name = "macro_traffic_sim_core"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Core library for macroscopic traffic simulation using the classical 4-step demand model."
 license = "Apache-2.0"
@@ -17,6 +17,8 @@ parallel = ["rayon"]
 lua = ["mlua"]
 
 [dependencies]
+gtfs-rs = { version = "0.1.0" }
+hyperpaths-rs = { version = "0.2.0" }
 ordered-float = "4"
 rayon = { version = "1", optional = true }
 mlua = { version = "0.12", features = ["lua54", "vendored"], optional = true }
@@ -52,6 +54,30 @@ name = "lua_vdf"
 path = "examples/lua_vdf/main.rs"
 required-features = ["lua"]
 
+[[example]]
+name = "transit"
+path = "examples/transit/main.rs"
+
+[[example]]
+name = "transit_gtfs"
+path = "examples/transit_gtfs/main.rs"
+
+[[example]]
+name = "gtfs_patterns"
+path = "examples/gtfs_patterns/main.rs"
+
+[[example]]
+name = "multimodal"
+path = "examples/multimodal/main.rs"
+
+[[example]]
+name = "transit_crowding"
+path = "examples/transit_crowding/main.rs"
+
+[[example]]
+name = "transit_congested"
+path = "examples/transit_congested/main.rs"
+
 [dev-dependencies]
 csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -76,4 +102,8 @@ harness = false
 name = "lua_vdf"
 harness = false
 required-features = ["lua"]
+
+[[bench]]
+name = "transit_assignment"
+harness = false
 

@@ -23,6 +23,11 @@ use crate::gmns::types::{AgentType, LinkID, ZoneID};
 use crate::mode_choice::logit::{ModeSkim, MultinomialLogit};
 use crate::od::OdMatrix;
 use crate::od::dense::DenseOdMatrix;
+use crate::transit::{
+    CongestedParams, CrowdingParams, TransitAssignmentOptions, TransitAssignmentResult,
+    TransitNetwork, assign_transit_congested, assign_transit_crowded, assign_transit_with_options,
+    congest_transit_network, transit_road_preload, transit_skim_with_options,
+};
 use crate::trip_distribution::gravity::GravityModel;
 use crate::trip_distribution::impedance::ImpedanceFunction;
 use crate::trip_generation::TripGenerator;
@@ -52,6 +57,65 @@ pub struct PipelineTimings {
     pub total: Duration,
 }
 
+/// Optional public transit layer for the pipeline.
+///
+/// When supplied to [`run_four_step_model`], mode choice gains a TRANSIT
+/// alternative (the caller's `logit_model` must include a
+/// [`AgentType::Transit`](crate::gmns::types::AgentType) utility), and the
+/// resulting transit demand is assigned with the optimal strategies
+/// algorithm.
+///
+/// The transit `network` must use the same zone IDs as the road zones for
+/// its access points (zone centroid = zone ID), so a single OD matrix
+/// splits cleanly across road and transit modes.
+///
+/// **Units:** the transit network must be built in **minutes** here. Mode
+/// choice compares the transit skim against the road skim, and the pipeline
+/// works in minutes (the road link times are converted from hours to
+/// minutes internally), so transit segment times, headways and walk times
+/// must be in minutes too. A GTFS-derived network is in seconds - convert
+/// it to minutes before feeding it to the pipeline (standalone
+/// [`assign_transit`](crate::transit::assign_transit) has no such
+/// requirement; it only needs internal consistency).
+pub struct TransitInput<'a> {
+    /// Transit routes and (zone-access) walk links.
+    pub network: &'a TransitNetwork,
+    /// Assignment options (waiting factor, penalties, dwell).
+    pub options: TransitAssignmentOptions,
+    /// Fixed exogenous transit demand added on top of the mode-choice
+    /// share before assignment, `None` for none. Use it for demand that
+    /// must not go through mode choice - captive riders with no car, a
+    /// known external matrix, a scenario constraint. It is added to (not
+    /// substituted for) the endogenous transit OD, so a logit without a
+    /// transit alternative simply assigns this matrix alone. Must use the
+    /// road zone IDs; entries on other zones are ignored.
+    pub fixed_od: Option<&'a dyn OdMatrix>,
+    /// Analysis period length (same time unit as the route headways) that
+    /// turns on the transit vehicle load on the road: buses on their
+    /// `segment_links` become a fixed background PCU in the road
+    /// assignment, congesting the roads they share with cars. `None`
+    /// leaves the road assignment unaffected by transit. Only routes that
+    /// declare `segment_links` contribute; see
+    /// [`transit_road_preload`](crate::transit::transit_road_preload).
+    pub analysis_period: Option<f64>,
+    /// Soft-capacity crowding parameters, `None` to disable. When set, the
+    /// final transit demand is assigned with
+    /// [`assign_transit_crowded`](crate::transit::assign_transit_crowded)
+    /// instead of the uncrowded solver: lines that carry passengers up to
+    /// their per-vehicle `capacity` lose effective frequency and shed load
+    /// onto less crowded alternatives. Only routes with a `capacity` set
+    /// crowd; the rest are unaffected. Ignored when `congested` is set.
+    pub crowding: Option<CrowdingParams>,
+    /// Strict-capacity congested parameters (Cepeda-Cominetti-Florian 2006),
+    /// `None` to disable. When set, the final transit demand is assigned with
+    /// [`assign_transit_congested`](crate::transit::assign_transit_congested):
+    /// a line's effective frequency vanishes as it reaches capacity, so it
+    /// cannot be overloaded and excess demand spills onto other lines. Takes
+    /// precedence over `crowding` (a line is either soft- or strict-capacity,
+    /// not both). Only routes with a `capacity` set are congested.
+    pub congested: Option<CongestedParams>,
+}
+
 /// Result of the complete 4-step model pipeline.
 ///
 /// Contains all intermediate and final results so callers can
@@ -76,6 +140,10 @@ pub struct PipelineResult {
     pub per_feedback_assignments: Vec<AssignmentResult>,
     /// Number of feedback iterations actually performed.
     pub feedback_iterations_done: usize,
+    /// Public transit assignment result, `None` when no transit layer was
+    /// supplied. Contains the optimal-strategies volumes, OD costs and
+    /// boardings for the final transit demand from mode choice.
+    pub transit: Option<TransitAssignmentResult>,
     /// Per-step timing breakdown.
     pub timings: PipelineTimings,
 }
@@ -95,12 +163,18 @@ pub struct PipelineResult {
 /// * `impedance` - Impedance function for the gravity model
 ///   (exponential, power, or combined).
 /// * `logit_model` - Multinomial logit mode choice model with
-///   utility functions per mode.
+///   utility functions per mode. Include an
+///   [`AgentType::Transit`](crate::gmns::types::AgentType) utility to
+///   enable the transit alternative (requires `transit` to be `Some`).
 /// * `config` - Model configuration (assignment method, BPR
 ///   parameters, convergence thresholds, feedback iterations).
+/// * `transit` - Optional public transit layer. When `Some`, mode choice
+///   gains a transit alternative fed by a transit skim, and the resulting
+///   transit demand is assigned with the optimal strategies algorithm.
 ///
 /// # Returns
-/// A [`PipelineResult`] with all intermediate and final results.
+/// A [`PipelineResult`] with all intermediate and final results (including
+/// `transit` when a transit layer was supplied).
 ///
 /// # Errors
 /// Returns [`SimError`] if any step fails (e.g., no zones,
@@ -112,6 +186,7 @@ pub fn run_four_step_model(
     impedance: &dyn ImpedanceFunction,
     logit_model: &MultinomialLogit,
     config: &ModelConfig,
+    transit: Option<TransitInput>,
     on_progress: Option<&dyn Fn(ProgressEvent)>,
 ) -> Result<PipelineResult, SimError> {
     set_verbose_level(config.verbose_level);
@@ -177,7 +252,16 @@ pub fn run_four_step_model(
     };
 
     // Build indexed graph once for skim computation
-    let igraph = IndexedGraph::from_network(network);
+    let mut igraph = IndexedGraph::from_network(network);
+    // Transit vehicles as a fixed background load on the road they share
+    // with cars. Flow-independent (headways are inputs), so set once here
+    // and reused by every assignment iteration.
+    if let Some(t) = &transit
+        && let Some(period) = t.analysis_period
+    {
+        let preload = transit_road_preload(t.network, period)?;
+        igraph.set_background_pcu(&preload);
+    }
     let mut skim_costs = vec![0.0; igraph.num_links];
     igraph.compute_costs(&vec![0.0; igraph.num_links], &config.bpr, &mut skim_costs)?;
     #[cfg(feature = "parallel")]
@@ -190,6 +274,32 @@ pub fn run_four_step_model(
     // Distance skim is invariant across feedback iterations (geometry doesn't change).
     // Wrapped in Rc to share across all 3 mode skims without cloning.
     let distance_skim_rc = Rc::new(distance_skim(network, &zone_ids));
+
+    // When any transit route runs on road links, its in-vehicle times react
+    // to road congestion, so the transit skim is recomputed each feedback
+    // iteration from the congested link costs. Otherwise the Spiess-Florian
+    // costs are flow-independent and the skim is computed once and reused.
+    let transit_congested = transit
+        .as_ref()
+        .is_some_and(|t| t.network.routes.iter().any(|r| r.segment_links.is_some()));
+    // Free-flow road link times, used to scale transit segment times by the
+    // road congestion factor (only when congested transit is active).
+    let ff_link_time: HashMap<LinkID, f64> = if transit_congested {
+        (0..igraph.num_links)
+            .map(|i| (igraph.link_id(i), igraph.link_ff_time[i]))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    // The transit network with congested in-vehicle times, rebuilt each
+    // iteration; `None` until the first road assignment (or when transit
+    // runs on its own right-of-way and never congests).
+    let mut congested_transit_net: Option<TransitNetwork> = None;
+    // Transit skim, recomputed each iteration when congested transit is on.
+    let mut transit_skim_map = match &transit {
+        Some(t) => Some(transit_skim_with_options(t.network, &zone_ids, &t.options)?),
+        None => None,
+    };
 
     let mut total_od;
     let mut mode_od;
@@ -268,6 +378,20 @@ pub fn run_four_step_model(
                 cost: Rc::clone(&zero_cost),
             },
         );
+
+        // Transit alternative: the flow-independent skim built once above.
+        // Missing pairs are unavailable (infinite time -> zero share).
+        if let Some(map) = &transit_skim_map {
+            mode_skims.insert(
+                AgentType::Transit,
+                ModeSkim::from_time_map(
+                    &zone_ids,
+                    map,
+                    Rc::clone(&distance_skim_rc),
+                    Rc::clone(&zero_cost),
+                ),
+            );
+        }
 
         mode_od = logit_model.split(&total_od, &mode_skims)?;
         t_mode_choice += step_start.elapsed();
@@ -383,8 +507,67 @@ pub fn run_four_step_model(
             }
         }
 
+        // Recompute the transit skim from the congested road times: buses on
+        // those links are slowed, shifting the transit level of service.
+        // Runs every iteration - the updated skim feeds the next mode choice,
+        // and the congested network is used for the final transit assignment.
+        if transit_congested && let Some(t) = &transit {
+            let net =
+                congest_transit_network(t.network, &ff_link_time, &assignment_result.link_costs);
+            transit_skim_map = Some(transit_skim_with_options(&net, &zone_ids, &t.options)?);
+            congested_transit_net = Some(net);
+        }
+
         // If this is the last iteration, return results
         if fb_iter + 1 == max_feedback {
+            // Assign the final transit demand with optimal strategies. Done
+            // once here (not per feedback iteration) since only the last
+            // split matters. The demand is the mode-choice transit share
+            // (if any) plus the optional fixed exogenous matrix; skipped
+            // when both are empty.
+            let transit_result = match &transit {
+                Some(t) => {
+                    let mut transit_od = mode_od
+                        .get(&AgentType::Transit)
+                        .cloned()
+                        .unwrap_or_else(|| DenseOdMatrix::new(zone_ids.clone()));
+                    if let Some(fixed) = t.fixed_od {
+                        for &o in &zone_ids {
+                            for &d in &zone_ids {
+                                let extra = fixed.get(o, d);
+                                if extra != 0.0 {
+                                    let current = transit_od.get(o, d);
+                                    transit_od.set(o, d, current + extra);
+                                }
+                            }
+                        }
+                    }
+                    if transit_od.total() > 0.0 {
+                        let step_start = Instant::now();
+                        // Use the congested transit network if it was built
+                        // (transit runs on roads), else the free-flow one.
+                        let net = congested_transit_net.as_ref().unwrap_or(t.network);
+                        // Crowding / strict capacity, when enabled, wrap the
+                        // solver in an outer averaging loop on the same network.
+                        // Strict capacity (congested) takes precedence over the
+                        // soft crowding.
+                        let result = if let Some(congested) = &t.congested {
+                            assign_transit_congested(net, &transit_od, &t.options, congested)?
+                                .assignment
+                        } else if let Some(crowding) = &t.crowding {
+                            assign_transit_crowded(net, &transit_od, &t.options, crowding)?
+                        } else {
+                            assign_transit_with_options(net, &transit_od, &t.options)?
+                        };
+                        t_assignment += step_start.elapsed();
+                        Some(result)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+
             log_main!(
                 EVENT_PIPELINE,
                 "Pipeline complete",
@@ -400,6 +583,7 @@ pub fn run_four_step_model(
                 assignment: assignment_result,
                 per_feedback_assignments,
                 feedback_iterations_done: feedback_done,
+                transit: transit_result,
                 timings: PipelineTimings {
                     generation: t_generation,
                     distribution: t_distribution,
@@ -670,6 +854,11 @@ fn speed_based_time_skim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gmns::meso::link::Link;
+    use crate::gmns::meso::node::Node;
+    use crate::transit::TransitRoute;
+    use crate::trip_distribution::ExponentialImpedance;
+    use crate::trip_generation::RegressionGenerator;
 
     const EPS: f64 = 1e-10;
 
@@ -692,5 +881,385 @@ mod tests {
         // North pole to south pole ~20015 km (half circumference)
         let dist = haversine_km(90.0, 0.0, -90.0, 0.0);
         assert!((dist - 20015.0).abs() < 100.0, "got {:.1} km", dist);
+    }
+
+    // A minimal 2-zone network. pop/emp are balanced so Furness converges:
+    // with P = 0.5 pop + 0.1 emp and A = 0.1 pop + 0.8 emp, pop = 4 * emp
+    // gives sum(P) = sum(A).
+    fn two_zone_setup() -> (Network, Vec<Zone>) {
+        let mut net = Network::new();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(55.75, 37.62)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(55.76, 37.62)
+                .build(),
+        )
+        .unwrap();
+        for (id, a, b) in [(100, 1, 2), (101, 2, 1)] {
+            net.add_link(
+                Link::new(id, a, b)
+                    .with_length_meters(1000.0)
+                    .with_free_speed(60.0)
+                    .with_capacity(1800.0)
+                    .with_lanes_num(2)
+                    .build(),
+            )
+            .unwrap();
+        }
+        let zones = vec![
+            Zone::new(1)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+            Zone::new(2)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+        ];
+        (net, zones)
+    }
+
+    fn base_config() -> ModelConfig {
+        ModelConfig::new()
+            .with_max_iterations(20)
+            .with_feedback_iterations(1)
+            .build()
+    }
+
+    #[test]
+    fn pipeline_without_transit_has_no_transit_result() {
+        let (net, zones) = two_zone_setup();
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk(),
+            &base_config(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(result.transit.is_none());
+        assert!(!result.mode_od.contains_key(&AgentType::Transit));
+    }
+
+    #[test]
+    fn pipeline_with_transit_assigns_transit_demand() {
+        let (net, zones) = two_zone_setup();
+        // Transit centroids = zone IDs: a line directly over stops 1 and 2.
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: None,
+                analysis_period: None,
+                crowding: None,
+                congested: None,
+            }),
+            None,
+        )
+        .unwrap();
+
+        // Mode choice produced a transit share, and it was assigned.
+        let transit_od_total = result.mode_od[&AgentType::Transit].total();
+        assert!(
+            transit_od_total > 0.0,
+            "transit demand = {}",
+            transit_od_total
+        );
+        let transit = result.transit.expect("transit result present");
+        // The line carries the 1 -> 2 transit demand (2 -> 1 is unavailable,
+        // so all transit demand is on 1 -> 2).
+        assert!(transit.total_boardings > 0.0);
+        assert!((transit.od_costs[&(1, 2)] - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipeline_congested_respects_capacity() {
+        let (net, zones) = two_zone_setup();
+        // Two parallel lines 1 -> 2; "Small" is capacity limited.
+        let mut transit_net = TransitNetwork::new();
+        transit_net
+            .add_route(TransitRoute::new("Big", vec![1, 2], vec![10.0], 6.0).with_capacity(1000.0));
+        transit_net
+            .add_route(TransitRoute::new("Small", vec![1, 2], vec![10.0], 6.0).with_capacity(30.0));
+
+        // 500 captive riders on 1 -> 2 bind the small line's capacity.
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 500.0);
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+                analysis_period: None,
+                crowding: None,
+                congested: Some(CongestedParams::new(60.0)),
+            }),
+            None,
+        )
+        .unwrap();
+
+        let transit = result.transit.expect("transit result present");
+        let big = transit.route_boardings["Big"];
+        let small = transit.route_boardings["Small"];
+        // Strict capacity: the small line stays below its (60/6)*30 = 300
+        // line capacity and carries less than the roomy big line.
+        assert!(small < 300.0, "small {} exceeds capacity", small);
+        assert!(big > small, "big {} should exceed small {}", big, small);
+    }
+
+    #[test]
+    fn pipeline_fixed_transit_od_adds_to_mode_choice_share() {
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        // Endogenous demand only, to read the baseline transit total.
+        let base = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: None,
+                analysis_period: None,
+                crowding: None,
+                congested: None,
+            }),
+            None,
+        )
+        .unwrap();
+        let base_demand = base.transit.unwrap().total_demand;
+
+        // 500 captive riders on 1 -> 2, added on top of the mode-choice share.
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 500.0);
+        let with_fixed = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+                analysis_period: None,
+                crowding: None,
+                congested: None,
+            }),
+            None,
+        )
+        .unwrap();
+        let with_demand = with_fixed.transit.unwrap().total_demand;
+
+        // The fixed 500 are added on top of the endogenous share.
+        assert!((with_demand - base_demand - 500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pipeline_fixed_transit_od_without_transit_mode() {
+        // A logit with no transit alternative, but a fixed transit matrix:
+        // the fixed demand alone is assigned, mode choice adds nothing.
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(TransitRoute::new("L1", vec![1, 2], vec![10.0], 6.0));
+
+        let mut fixed = DenseOdMatrix::new(vec![1, 2]);
+        fixed.set(1, 2, 300.0);
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk(),
+            &base_config(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: Some(&fixed),
+                analysis_period: None,
+                crowding: None,
+                congested: None,
+            }),
+            None,
+        )
+        .unwrap();
+        // No transit mode in the logit -> mode_od has no transit share.
+        assert!(!result.mode_od.contains_key(&AgentType::Transit));
+        // The fixed 300 are still assigned.
+        let transit = result.transit.expect("fixed transit assigned");
+        assert!((transit.total_demand - 300.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pipeline_transit_preload_raises_road_cost() {
+        // A frequent bus running on link 100 loads that link even with no
+        // passengers, so the road cost on 100 rises; link 101 (no bus) is
+        // untouched. Logit has no transit mode, isolating the preload
+        // effect from any mode shift.
+        let (net, zones) = two_zone_setup();
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100]]),
+        );
+
+        let run = |analysis_period: Option<f64>| {
+            run_four_step_model(
+                &net,
+                &zones,
+                &RegressionGenerator::new(),
+                &ExponentialImpedance::new(0.1),
+                &MultinomialLogit::default_auto_bike_walk(),
+                &base_config(),
+                Some(TransitInput {
+                    network: &transit_net,
+                    options: TransitAssignmentOptions::default(),
+                    fixed_od: None,
+                    analysis_period,
+                    crowding: None,
+                    congested: None,
+                }),
+                None,
+            )
+            .unwrap()
+        };
+
+        let base = run(None);
+        // 60 min period, headway 6 -> 10 buses * 2.0 pce = 20 background PCU
+        // on link 100.
+        let loaded = run(Some(60.0));
+
+        let base_100 = base.assignment.link_costs[&100];
+        let loaded_100 = loaded.assignment.link_costs[&100];
+        assert!(
+            loaded_100 > base_100,
+            "cost on 100 should rise with the bus preload: {} -> {}",
+            base_100,
+            loaded_100
+        );
+        // Link 101 carries no bus and the same auto flow, so it is unchanged.
+        let base_101 = base.assignment.link_costs[&101];
+        let loaded_101 = loaded.assignment.link_costs[&101];
+        assert!((base_101 - loaded_101).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipeline_road_congestion_slows_transit() {
+        // Link 100 has a low capacity, so the auto demand congests it. A bus
+        // that runs on link 100 (segment_links) is slowed by that congestion:
+        // its in-vehicle time, and hence the transit skim and od cost, exceed
+        // the free-flow value (6 wait + 10 ride = 16).
+        let mut net = Network::new();
+        net.add_node(
+            Node::new(1)
+                .with_zone_id(1)
+                .with_coordinates(55.75, 37.62)
+                .build(),
+        )
+        .unwrap();
+        net.add_node(
+            Node::new(2)
+                .with_zone_id(2)
+                .with_coordinates(55.76, 37.62)
+                .build(),
+        )
+        .unwrap();
+        // link 100 (1 -> 2): low capacity -> congests. link 101 (2 -> 1): normal.
+        net.add_link(
+            Link::new(100, 1, 2)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(150.0)
+                .with_lanes_num(1)
+                .build(),
+        )
+        .unwrap();
+        net.add_link(
+            Link::new(101, 2, 1)
+                .with_length_meters(1000.0)
+                .with_free_speed(60.0)
+                .with_capacity(1800.0)
+                .with_lanes_num(2)
+                .build(),
+        )
+        .unwrap();
+        let zones = vec![
+            Zone::new(1)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+            Zone::new(2)
+                .with_population(1000.0)
+                .with_employment(250.0)
+                .build(),
+        ];
+
+        let mut transit_net = TransitNetwork::new();
+        transit_net.add_route(
+            TransitRoute::new("B1", vec![1, 2], vec![10.0], 6.0)
+                .with_segment_links(vec![vec![100]]),
+        );
+
+        let result = run_four_step_model(
+            &net,
+            &zones,
+            &RegressionGenerator::new(),
+            &ExponentialImpedance::new(0.1),
+            &MultinomialLogit::default_auto_bike_walk_transit(),
+            &ModelConfig::new()
+                .with_max_iterations(30)
+                .with_feedback_iterations(2)
+                .build(),
+            Some(TransitInput {
+                network: &transit_net,
+                options: TransitAssignmentOptions::default(),
+                fixed_od: None,
+                analysis_period: None,
+                crowding: None,
+                congested: None,
+            }),
+            None,
+        )
+        .unwrap();
+
+        let transit = result.transit.expect("transit assigned");
+        // Congested in-vehicle time pushes the 1 -> 2 cost above free-flow 16.
+        assert!(
+            transit.od_costs[&(1, 2)] > 16.0,
+            "congested transit cost {} should exceed free-flow 16",
+            transit.od_costs[&(1, 2)]
+        );
     }
 }

@@ -13,6 +13,7 @@
 //! - [`SimError::ModeChoice`] -- step 3 errors
 //! - [`SimError::Assignment`] -- step 4 errors
 //! - [`SimError::Pipeline`] -- orchestration errors
+//! - [`SimError::Transit`] -- public transit assignment errors
 //!
 //! ## Examples
 //!
@@ -31,6 +32,7 @@ use crate::assignment::error::AssignmentError;
 use crate::gmns::error::GraphError;
 use crate::mode_choice::error::ModeChoiceError;
 use crate::pipeline::error::PipelineError;
+use crate::transit::error::TransitError;
 use crate::trip_distribution::error::TripDistributionError;
 use crate::trip_generation::error::TripGenerationError;
 
@@ -68,6 +70,8 @@ pub enum SimError {
     Assignment(AssignmentError),
     /// Pipeline orchestration errors.
     Pipeline(PipelineError),
+    /// Public transit assignment errors.
+    Transit(TransitError),
 }
 
 impl fmt::Display for SimError {
@@ -79,6 +83,7 @@ impl fmt::Display for SimError {
             SimError::ModeChoice(e) => write!(f, "mode choice error: {}", e),
             SimError::Assignment(e) => write!(f, "assignment error: {}", e),
             SimError::Pipeline(e) => write!(f, "pipeline error: {}", e),
+            SimError::Transit(e) => write!(f, "transit error: {}", e),
         }
     }
 }
@@ -116,5 +121,11 @@ impl From<AssignmentError> for SimError {
 impl From<PipelineError> for SimError {
     fn from(e: PipelineError) -> Self {
         SimError::Pipeline(e)
+    }
+}
+
+impl From<TransitError> for SimError {
+    fn from(e: TransitError) -> Self {
+        SimError::Transit(e)
     }
 }

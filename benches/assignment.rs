@@ -343,7 +343,7 @@ fn bench_simple_network(c: &mut Criterion) {
     c.bench_function("simple_network_pipeline", |b| {
         b.iter(|| {
             run_four_step_model(
-                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
             )
             .unwrap()
         });
@@ -367,7 +367,7 @@ fn bench_grid_city(c: &mut Criterion) {
     c.bench_function("grid_city_pipeline", |b| {
         b.iter(|| {
             run_four_step_model(
-                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
             )
             .unwrap()
         });
@@ -489,7 +489,7 @@ fn bench_large_grid(c: &mut Criterion) {
     c.bench_function("large_grid_pipeline", |b| {
         b.iter(|| {
             run_four_step_model(
-                &network, &zones, &trip_gen, &impedance, &logit, &config, None,
+                &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
             )
             .unwrap()
         });
@@ -539,6 +539,7 @@ fn bench_warm_start(c: &mut Criterion) {
                 &logit,
                 &config_cold,
                 None,
+                None,
             )
             .unwrap()
         });
@@ -553,6 +554,7 @@ fn bench_warm_start(c: &mut Criterion) {
                 &impedance,
                 &logit,
                 &config_warm,
+                None,
                 None,
             )
             .unwrap()

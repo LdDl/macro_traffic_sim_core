@@ -10,7 +10,8 @@
 //!
 //! - [`node::Node`] -- network node (intersection point or mid-link point)
 //! - [`link::Link`] -- directed link (road segment or connection/turn)
-//! - [`network::Network`] -- graph container with adjacency and zone lookups
+//! - [`network::Network`] -- graph container with adjacency, zone lookups,
+//!   and the [`location`](crate::gmns::location) records of this layer
 //!
 //! ## Examples
 //!

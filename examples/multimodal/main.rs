@@ -1,48 +1,73 @@
-//! Example: multi-class path analysis on a small in-memory network.
+//! Example: a multimodal city - personal cars and public transit on
+//! one GMNS network.
 //!
-//! Same diamond network as `simple_network` / `multiclass_network`,
-//! but with `store_paths = true` and two user classes (car + truck)
-//! to extract per-OD, per-class shortest paths.
+//! Extends `path_analysis_multi_class` (full 4-step pipeline, car +
+//! truck, path analysis) with a public transit layer:
 //!
-//! Demonstrates:
-//! 1. Extracting per-class shortest routes between two zones (OD pair query)
-//! 2. Select link analysis with per-class breakdown
+//! - two bus lines and an in-street tram line, defined over stops that
+//!   are GMNS locations pinned to the road links (the road graph is never modified);
+//! - zone centroids (the zone IDs themselves) connected to nearby stops
+//!   by walk links - the algorithm itself picks the access stop per destination;
+//! - transit as a fourth mode-choice alternative: the logit splits the
+//!   total demand into auto/bike/walk/transit from a transit skim, and the
+//!   transit share is assigned with the Spiess-Florian optimal strategies
+//!   algorithm inside the same 4-step pipeline as the car/truck equilibrium.
+//!
+//! Both the road and transit demand come from the one 4-step run: mode
+//! choice is where they part.
 //!
 //! ```text
-//!        Zone 1 (residential)
-//!          |
-//!     [1]--+--[2]
-//!      |         |
-//! Zone 2         Zone 3
-//! (mixed)        (commercial)
-//!      |         |
-//!     [3]--+--[4]
-//!          |
-//!        Zone 4 (industrial)
+//!                 Zone 1 (residential)
+//!                        [1]
+//!       tram T1        /     \        buses B1, B2
+//!                   [3]       [2]
+//!   Zone 3 (commercial)       Zone 2 (mixed)
+//!                      \     /
+//!                        [4]
+//!                 Zone 4 (industrial)
+//!
+//!   transit: bus B1 (z1-z2-z4) and bus B2 (z1-z4 express) run down the
+//!   eastern side, tram T1 (z1-z3-z4) down the western side; each line
+//!   has a reverse twin
 //! ```
 //!
-//! Each edge is a pair of one-way road segment links (forward + reverse).
-//! Connection links at each intersection allow all through-movements
-//! and turns except U-turns.
-//!
 //! Usage:
-//!   cargo run --example path_analysis_multi_class
+//!   cargo run --example multimodal
 
 use std::collections::HashMap;
 
 use macro_traffic_sim_core::config::{AssignmentMethodType, ModelConfig, UserClassConfig};
+use macro_traffic_sim_core::gmns::location::Location;
 use macro_traffic_sim_core::gmns::meso::link::Link;
 use macro_traffic_sim_core::gmns::meso::network::Network;
 use macro_traffic_sim_core::gmns::meso::node::Node;
 use macro_traffic_sim_core::gmns::types::AgentType;
 use macro_traffic_sim_core::mode_choice::MultinomialLogit;
 use macro_traffic_sim_core::od::OdMatrix;
-use macro_traffic_sim_core::pipeline::{haversine_km, run_four_step_model};
+use macro_traffic_sim_core::pipeline::{TransitInput, haversine_km, run_four_step_model};
+use macro_traffic_sim_core::transit::{
+    CrowdingParams, TransitAssignmentOptions, TransitLinkKind, TransitNetwork, TransitRoute,
+};
 use macro_traffic_sim_core::trip_distribution::ExponentialImpedance;
 use macro_traffic_sim_core::trip_generation::RegressionGenerator;
 use macro_traffic_sim_core::verbose::VerboseLevel;
 use macro_traffic_sim_core::zone::Zone;
 use tracing::info;
+
+// Transit stop locations: points on road links (IDs 8xx). Zone centroids
+// are the zone IDs themselves (1-4) - a transit trip starts and ends at
+// its zone, walking to a stop from there. Using the zone IDs as centroids
+// is what lets one OD matrix split across road and transit modes.
+const STOP_Z1_EAST: i64 = 811;
+const STOP_Z2: i64 = 812;
+const STOP_Z4_EAST: i64 = 814;
+const STOP_Z1_WEST: i64 = 821;
+const STOP_Z3: i64 = 823;
+const STOP_Z4_WEST: i64 = 824;
+const ZONE_1: i64 = 1;
+const ZONE_2: i64 = 2;
+const ZONE_3: i64 = 3;
+const ZONE_4: i64 = 4;
 
 fn main() {
     let network = build_network();
@@ -64,14 +89,19 @@ fn main() {
     // Trip distribution: exponential impedance f(t) = exp(-0.1 * t)
     let impedance = ExponentialImpedance::new(0.1);
 
-    // Mode choice: multinomial logit (auto/bike/walk)
-    let logit = MultinomialLogit::default_auto_bike_walk();
+    // Mode choice: multinomial logit with a transit alternative
+    // (auto/bike/walk/transit). Transit demand is derived here, not fed by
+    // hand, from the transit skim computed over the transit network below.
+    let logit = MultinomialLogit::default_auto_bike_walk_transit();
+
+    // Transit layer, built before the pipeline so mode choice can skim it.
+    let transit_network = build_transit_network();
 
     // Config: Frank-Wolfe with store_paths, multi-class, 3 feedback iterations
     let class_names = ["car", "truck"];
     let config = ModelConfig::new()
         .with_assignment_method(AssignmentMethodType::FrankWolfe)
-        .with_max_iterations(50)
+        .with_max_iterations(200)
         .with_convergence_gap(1e-4)
         .with_feedback_iterations(3)
         .with_verbose_level(VerboseLevel::Main)
@@ -83,7 +113,28 @@ fn main() {
         .build();
 
     let result = run_four_step_model(
-        &network, &zones, &trip_gen, &impedance, &logit, &config, None, None,
+        &network,
+        &zones,
+        &trip_gen,
+        &impedance,
+        &logit,
+        &config,
+        Some(TransitInput {
+            network: &transit_network,
+            options: TransitAssignmentOptions::default(),
+            fixed_od: None,
+            // 1-hour analysis period (times are in minutes): turns on the
+            // bus load on the east road links, so buses and cars congest
+            // each other.
+            analysis_period: Some(60.0),
+            // Crowding on the same 1-hour period: the east local bus B1 fills
+            // up (its per-vehicle capacity is set below), loses effective
+            // frequency, and sheds riders onto the west tram and the express.
+            crowding: Some(CrowdingParams::new(60.0)),
+            // Soft crowding here, not strict capacity.
+            congested: None,
+        }),
+        None,
     )
     .expect("pipeline failed");
 
@@ -99,7 +150,12 @@ fn main() {
     }
 
     // Mode split totals
-    for mode in &[AgentType::Auto, AgentType::Bike, AgentType::Walk] {
+    for mode in &[
+        AgentType::Auto,
+        AgentType::Bike,
+        AgentType::Walk,
+        AgentType::Transit,
+    ] {
         if let Some(od) = result.mode_od.get(mode) {
             info!(
                 event = "mode_split",
@@ -292,6 +348,79 @@ fn main() {
         od_pairs = select_link_sorted.len(),
         "Select link total",
     );
+
+    // Public transit results: the transit share from mode choice was
+    // assigned inside the pipeline with the optimal strategies algorithm.
+    let transit = match &result.transit {
+        Some(t) => t,
+        None => {
+            info!(event = "transit", "No transit demand assigned");
+            return;
+        }
+    };
+
+    info!(
+        event = "transit_summary",
+        demand = format!("{:.1}", transit.total_demand),
+        boardings = format!("{:.1}", transit.total_boardings),
+        transfers = format!("{:.1}", transit.transfers()),
+        "Transit assignment complete",
+    );
+
+    // Expected travel times per OD pair (waiting + in-vehicle + walking)
+    let mut od_costs: Vec<(&(i64, i64), &f64)> = transit.od_costs.iter().collect();
+    od_costs.sort_by_key(|((o, d), _)| (*o, *d));
+    for ((origin, destination), cost) in od_costs {
+        info!(
+            event = "transit_od_cost",
+            origin = origin,
+            destination = destination,
+            expected_min = format!("{:.2}", cost),
+            "Transit expected travel time",
+        );
+    }
+
+    // Access stop choice: walking volumes leaving the zone centroids (IDs
+    // 1-4) show which stop each zone uses, per destination mix
+    for lv in &transit.link_volumes {
+        if lv.kind == TransitLinkKind::Walking && lv.volume > 0.0 && lv.from_stop <= 4 {
+            info!(
+                event = "transit_access",
+                zone = lv.from_stop,
+                stop = lv.to_stop,
+                passengers = format!("{:.1}", lv.volume),
+                "Access walk",
+            );
+        }
+    }
+
+    // Riding volumes per line segment
+    for lv in &transit.link_volumes {
+        if lv.kind == TransitLinkKind::Riding && lv.volume > 0.0 {
+            info!(
+                event = "transit_riding",
+                route = lv.route_id.as_deref().unwrap_or("-"),
+                from_stop = lv.from_stop,
+                to_stop = lv.to_stop,
+                passengers = format!("{:.1}", lv.volume),
+                "Riding volume",
+            );
+        }
+    }
+
+    // Boardings per route
+    let mut boardings: Vec<(&String, &f64)> = transit.route_boardings.iter().collect();
+    boardings.sort_by(|a, b| a.0.cmp(b.0));
+    for (route_id, volume) in boardings {
+        if *volume > 0.0 {
+            info!(
+                event = "transit_boardings",
+                route = route_id.as_str(),
+                passengers = format!("{:.1}", volume),
+                "Route boardings",
+            );
+        }
+    }
 }
 
 /// Build the 4-zone diamond network.
@@ -337,12 +466,22 @@ fn build_network() -> Network {
         let (_, lat2, lon2) = coords.iter().find(|&&(id, _, _)| id == b).unwrap();
         let dist = haversine_km(*lat1, *lon1, *lat2, *lon2) * 1000.0;
 
+        // The eastern corridor (edges 1-2 and 2-4, links 100/101/104/105)
+        // is deliberately narrow so it congests: that is where the buses
+        // run, so the road<->transit coupling shows there. The western
+        // corridor (the tram side) is wide and stays free-flowing.
+        let capacity = if (a, b) == (1, 2) || (a, b) == (2, 4) {
+            1000.0
+        } else {
+            1800.0
+        };
+
         // Forward: a -> b
         net.add_link(
             Link::new(link_id, a, b)
                 .with_length_meters(dist)
                 .with_free_speed(60.0)
-                .with_capacity(1800.0)
+                .with_capacity(capacity)
                 .with_lanes_num(2)
                 .build(),
         )
@@ -355,7 +494,7 @@ fn build_network() -> Network {
             Link::new(link_id, b, a)
                 .with_length_meters(dist)
                 .with_free_speed(60.0)
-                .with_capacity(1800.0)
+                .with_capacity(capacity)
                 .with_lanes_num(2)
                 .build(),
         )
@@ -400,6 +539,28 @@ fn build_network() -> Network {
         }
     }
 
+    // Transit stops as GMNS locations: points on the road links, the
+    // road graph itself is untouched. Eastern side (links 1->2 and
+    // 2->4) hosts the bus stops, western side (1->3 and 3->4) the
+    // in-street tram stops. One platform per stop serves both
+    // directions here; real models would split them per direction.
+    let stops = [
+        (STOP_Z1_EAST, road_links[&(1, 2)], 1, 100.0, "bus_stop"),
+        (STOP_Z2, road_links[&(1, 2)], 1, 700.0, "bus_stop"),
+        (STOP_Z4_EAST, road_links[&(2, 4)], 2, 750.0, "bus_stop"),
+        (STOP_Z1_WEST, road_links[&(1, 3)], 1, 100.0, "tram_stop"),
+        (STOP_Z3, road_links[&(1, 3)], 1, 700.0, "tram_stop"),
+        (STOP_Z4_WEST, road_links[&(3, 4)], 3, 750.0, "tram_stop"),
+    ];
+    for &(loc_id, on_link, ref_node, offset, loc_type) in &stops {
+        net.add_location(
+            Location::new(loc_id, on_link, ref_node, offset)
+                .with_loc_type(loc_type)
+                .build(),
+        )
+        .unwrap();
+    }
+
     net
 }
 
@@ -436,4 +597,102 @@ fn build_zones() -> Vec<Zone> {
             .with_employment(2000.0)
             .build(),
     ]
+}
+
+/// Build the transit layer over the stop locations (times in minutes).
+///
+/// Eastern side: bus B1 serves every stop (z1 - z2 - z4), bus B2 runs
+/// express (z1 - z4, no intermediate stop). They share stops 811 and
+/// 814, so for a z1 -> z4 passenger the optimal strategy is "board
+/// whichever comes first" with the frequency-proportional split of
+/// Spiess & Florian. Western side: tram T1 (z1 - z3 - z4). Each line
+/// has a reverse twin (suffix "r") because `TransitRoute` is one-way.
+///
+/// Zone centroids (the zone IDs 1-4) join as pseudo-stops via walk links;
+/// zones 1 and 4 reach both sides of the network, so the access stop is
+/// chosen by the algorithm per destination, not hardwired.
+fn build_transit_network() -> TransitNetwork {
+    let mut net = TransitNetwork::new();
+
+    // Eastern buses run in mixed traffic: each segment declares the road
+    // links it uses (100/101 on 1<->2, 104/105 on 2<->4), so the buses
+    // preload those links and their in-vehicle times follow the road
+    // congestion. Road links 100 = 1->2, 101 = 2->1, 104 = 2->4, 105 = 4->2.
+    //
+    // Per-vehicle capacity turns on crowding: the local B1 at a 6-minute
+    // headway is a line capacity of (60/6)*50 = 500 passengers/hour, below
+    // its uncrowded load, so it crowds and sheds riders. The express B2 at
+    // a 12-minute headway seats 60, and the trams are roomy - they absorb
+    // the spillover.
+    net.add_route(
+        TransitRoute::new(
+            "B1",
+            vec![STOP_Z1_EAST, STOP_Z2, STOP_Z4_EAST],
+            vec![6.0, 7.0],
+            6.0,
+        )
+        .with_segment_links(vec![vec![100], vec![104]])
+        .with_capacity(50.0),
+    );
+    net.add_route(
+        TransitRoute::new(
+            "B1r",
+            vec![STOP_Z4_EAST, STOP_Z2, STOP_Z1_EAST],
+            vec![7.0, 6.0],
+            6.0,
+        )
+        .with_segment_links(vec![vec![105], vec![101]])
+        .with_capacity(50.0),
+    );
+    net.add_route(
+        TransitRoute::new("B2", vec![STOP_Z1_EAST, STOP_Z4_EAST], vec![11.0], 12.0)
+            .with_segment_links(vec![vec![100, 104]])
+            .with_capacity(60.0),
+    );
+    net.add_route(
+        TransitRoute::new("B2r", vec![STOP_Z4_EAST, STOP_Z1_EAST], vec![11.0], 12.0)
+            .with_segment_links(vec![vec![105, 101]])
+            .with_capacity(60.0),
+    );
+
+    // Western tram runs on a segregated right-of-way (no segment_links):
+    // its own lane, so it neither loads the road nor is slowed by it - it
+    // stays fast while the buses sit in traffic. A real tram often shares
+    // the street (you would give it segment_links too); we keep it
+    // segregated here to contrast a coupled line with an uncoupled one.
+    net.add_route(
+        TransitRoute::new(
+            "T1",
+            vec![STOP_Z1_WEST, STOP_Z3, STOP_Z4_WEST],
+            vec![5.0, 5.0],
+            8.0,
+        )
+        .with_capacity(120.0),
+    );
+    net.add_route(
+        TransitRoute::new(
+            "T1r",
+            vec![STOP_Z4_WEST, STOP_Z3, STOP_Z1_WEST],
+            vec![5.0, 5.0],
+            8.0,
+        )
+        .with_capacity(120.0),
+    );
+
+    // Zone access: zone centroid <-> stop walk links, both directions.
+    // Zones 1 and 4 have a choice between the bus and the tram side.
+    let walks = [
+        (ZONE_1, STOP_Z1_EAST, 3.0),
+        (ZONE_1, STOP_Z1_WEST, 4.0),
+        (ZONE_2, STOP_Z2, 2.0),
+        (ZONE_3, STOP_Z3, 2.0),
+        (ZONE_4, STOP_Z4_EAST, 2.0),
+        (ZONE_4, STOP_Z4_WEST, 3.0),
+    ];
+    for &(centroid, stop, minutes) in &walks {
+        net.add_walk_link(centroid, stop, minutes);
+        net.add_walk_link(stop, centroid, minutes);
+    }
+
+    net
 }

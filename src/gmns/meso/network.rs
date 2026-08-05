@@ -31,6 +31,7 @@ use super::link::Link;
 use super::node::Node;
 use crate::error::SimError;
 use crate::gmns::error::GraphError;
+use crate::gmns::location::Location;
 use crate::gmns::types::*;
 
 /// Container for the mesoscopic transport network.
@@ -65,6 +66,8 @@ pub struct Network {
     pub nodes: HashMap<NodeID, Node>,
     /// All meso links indexed by ID.
     pub links: HashMap<LinkID, Link>,
+    /// Points along links (GMNS locations: bus stops, driveways) indexed by ID.
+    pub locations: HashMap<i64, Location>,
     /// Mapping from zone ID to the centroid node ID.
     pub zone_centroids: HashMap<ZoneID, NodeID>,
 }
@@ -75,6 +78,7 @@ impl Network {
         Network {
             nodes: HashMap::new(),
             links: HashMap::new(),
+            locations: HashMap::new(),
             zone_centroids: HashMap::new(),
         }
     }
@@ -124,6 +128,148 @@ impl Network {
             target_node.incoming_links.push(id);
         }
         Ok(())
+    }
+
+    /// Add a location (point along a link) to the network.
+    ///
+    /// The referenced link must already exist and the linear reference
+    /// offset `lr` must place the location on it: `0 <= lr <= link length`.
+    /// The upper bound is only checked when the link has a positive length
+    /// (links built without one skip it).
+    ///
+    /// # Returns
+    /// Error if a location with the same ID already exists, the referenced
+    /// link is missing, or `lr` is outside `[0, link length]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::gmns::location::Location;
+    /// use macro_traffic_sim_core::gmns::meso::link::Link;
+    /// use macro_traffic_sim_core::gmns::meso::network::Network;
+    /// use macro_traffic_sim_core::gmns::meso::node::Node;
+    ///
+    /// let mut net = Network::new();
+    /// net.add_node(Node::new(1).build()).unwrap();
+    /// net.add_node(Node::new(2).build()).unwrap();
+    /// net.add_link(Link::new(100, 1, 2).build()).unwrap();
+    ///
+    /// // a bus stop 120 m down link 100, linked to a GTFS stop
+    /// let stop = Location::new(500, 100, 1, 120.0)
+    ///     .with_loc_type("bus_stop")
+    ///     .with_gtfs_stop_id("stop_A")
+    ///     .build();
+    /// net.add_location(stop).unwrap();
+    /// assert_eq!(net.get_location(500).unwrap().link_id, 100);
+    ///
+    /// // duplicate location ID is rejected
+    /// let dup = Location::new(500, 100, 1, 300.0).build();
+    /// assert!(net.add_location(dup).is_err());
+    ///
+    /// // referencing a missing link is rejected
+    /// let dangling = Location::new(501, 999, 1, 0.0).build();
+    /// assert!(net.add_location(dangling).is_err());
+    ///
+    /// // an offset past the end of a measured link is rejected
+    /// net.add_link(Link::new(200, 1, 2).with_length_meters(500.0).build()).unwrap();
+    /// let off_link = Location::new(502, 200, 1, 600.0).build();
+    /// assert!(net.add_location(off_link).is_err());
+    /// ```
+    pub fn add_location(&mut self, location: Location) -> Result<(), SimError> {
+        let id = location.id;
+        if self.locations.contains_key(&id) {
+            return Err(GraphError::DuplicateId {
+                entity: "location".to_string(),
+                id,
+            }
+            .into());
+        }
+        let link = match self.links.get(&location.link_id) {
+            Some(link) => link,
+            None => {
+                return Err(GraphError::LinkNotFound {
+                    link_id: location.link_id,
+                }
+                .into());
+            }
+        };
+        // The linear reference offset must place the location on the link.
+        // A positive link length is required to validate the upper bound;
+        // links built without a length (0.0) skip it.
+        if location.lr.is_nan()
+            || location.lr < 0.0
+            || (link.length_meters > 0.0 && location.lr > link.length_meters)
+        {
+            return Err(GraphError::LocationOffsetOutOfRange {
+                location_id: id,
+                link_id: location.link_id,
+                lr: location.lr,
+                link_length: link.length_meters,
+            }
+            .into());
+        }
+        self.locations.insert(id, location);
+        Ok(())
+    }
+
+    /// Get a location by ID.
+    pub fn get_location(&self, id: i64) -> Result<&Location, SimError> {
+        self.locations
+            .get(&id)
+            .ok_or_else(|| GraphError::LocationNotFound { location_id: id }.into())
+    }
+
+    /// Returns the mapping from GTFS stop IDs to location IDs.
+    ///
+    /// Only locations with a `gtfs_stop_id` are included. This is the
+    /// user-provided linkage between a GTFS dataset and the road network:
+    /// each transit stop is a location on a link (link_id + offset).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use macro_traffic_sim_core::gmns::location::Location;
+    /// use macro_traffic_sim_core::gmns::meso::link::Link;
+    /// use macro_traffic_sim_core::gmns::meso::network::Network;
+    /// use macro_traffic_sim_core::gmns::meso::node::Node;
+    ///
+    /// let mut net = Network::new();
+    /// net.add_node(Node::new(1).build()).unwrap();
+    /// net.add_node(Node::new(2).build()).unwrap();
+    /// net.add_link(Link::new(100, 1, 2).build()).unwrap();
+    ///
+    /// net.add_location(
+    ///     Location::new(500, 100, 1, 120.0)
+    ///         .with_gtfs_stop_id("stop_A")
+    ///         .build(),
+    /// )
+    /// .unwrap();
+    /// // a location without a GTFS linkage is not part of the mapping
+    /// net.add_location(Location::new(501, 100, 1, 450.0).build()).unwrap();
+    ///
+    /// let mapping = net.gtfs_stop_mapping();
+    /// assert_eq!(mapping.get("stop_A"), Some(&500));
+    /// assert_eq!(mapping.len(), 1);
+    /// ```
+    pub fn gtfs_stop_mapping(&self) -> HashMap<String, i64> {
+        self.locations
+            .values()
+            .filter_map(|loc| loc.gtfs_stop_id.as_ref().map(|s| (s.clone(), loc.id)))
+            .collect()
+    }
+
+    /// Returns `(id, latitude, longitude)` for every location.
+    ///
+    /// A convenience for feeding transit stops to
+    /// [`generate_access_connectors`](crate::transit::generate_access_connectors):
+    /// the connector generator works on coordinates, and locations carry
+    /// theirs (set with `Location::with_coordinates`). The order is
+    /// unspecified.
+    pub fn location_coords(&self) -> Vec<(i64, f64, f64)> {
+        self.locations
+            .values()
+            .map(|loc| (loc.id, loc.latitude, loc.longitude))
+            .collect()
     }
 
     /// Get a node by ID.

@@ -226,6 +226,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "gtfs-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b12b903f72048a39f81464dd418eb0422b44bb5f8ff1543d8f5f3b3aefdd0d26"
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -241,6 +247,12 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+
+[[package]]
+name = "hyperpaths-rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a41290a49b8b32e6c81afbed09562d3b6702568fabcd511452d52c402933f129"
 
 [[package]]
 name = "is-terminal"
@@ -326,10 +338,12 @@ dependencies = [
 
 [[package]]
 name = "macro_traffic_sim_core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "csv",
+ "gtfs-rs",
+ "hyperpaths-rs",
  "mlua",
  "ordered-float",
  "rayon",

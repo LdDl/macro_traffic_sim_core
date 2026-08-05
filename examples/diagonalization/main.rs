@@ -106,7 +106,7 @@ fn main() {
     )
     .expect("diagonalization failed");
 
-    println!("\n--- Assignment result ---");
+    println!("\nAssignment result:");
     println!(
         "Iterations: {}, gap: {:.6}, converged: {}",
         result.iterations, result.relative_gap, result.converged
@@ -124,7 +124,7 @@ fn main() {
     println!("PCU total on network: {:.1}", pcu_total);
 
     // Top loaded links
-    println!("\n--- Top 10 links by PCU volume ---");
+    println!("\nTop 10 links by PCU volume:");
     let mut volumes: Vec<(i64, f64)> = result
         .link_volumes
         .iter()
@@ -140,7 +140,7 @@ fn main() {
     }
 
     // Per-class cost comparison on the same link
-    println!("\n--- Per-class cost comparison ---");
+    println!("\nPer-class cost comparison:");
     println!("Car VDF:   BPR(alpha=0.15, beta=4.0)");
     println!("Truck VDF: BPR(alpha=0.30, beta=4.0)");
     if let Some(&(top_link, top_vol)) = volumes.first() {
@@ -166,7 +166,7 @@ fn main() {
         }
     };
 
-    println!("\n--- Paths: {} total ---", paths.len());
+    println!("\nPaths: {} total", paths.len());
 
     // Count paths per class
     for (ci, name) in class_names.iter().enumerate() {
@@ -180,7 +180,7 @@ fn main() {
     // OD pair query: Zone 1 -> Zone 4, per class
     let origin = 1;
     let dest = 4;
-    println!("\n--- OD pair: Zone {} -> Zone {} ---", origin, dest);
+    println!("\nOD pair: Zone {} -> Zone {}", origin, dest);
 
     for (ci, name) in class_names.iter().enumerate() {
         let class_paths: Vec<_> = paths
@@ -223,7 +223,7 @@ fn main() {
 
     // Select link analysis: which OD pairs use a specific link?
     let target_link: i64 = 102;
-    println!("\n--- Select link analysis: link {} ---", target_link);
+    println!("\nSelect link analysis: link {}", target_link);
 
     let mut od_totals: HashMap<(i64, i64, Option<u16>), f64> = HashMap::new();
     for p in paths {
