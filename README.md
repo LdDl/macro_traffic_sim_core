@@ -102,7 +102,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-macro_traffic_sim_core = "0.1.1"
+macro_traffic_sim_core = "0.2.1"
 ```
 
 Minimal usage:
@@ -302,9 +302,9 @@ macro_traffic_sim_core
   pipeline/             - 4-step model orchestrator
   transit/              - frequency-based public transit (optimal strategies)
     route               - TransitRoute, WalkLink, TransitNetwork data model
-    assignment          - route graph expansion, assign_transit, skims
+    assignment          - route graph expansion, assign_transit, skims, PreparedTransitNetwork
       congested         - strict-capacity congested equilibrium (Cepeda-Cominetti-Florian)
-    crowding            - soft-capacity crowding (De Cea-Fernandez / Cominetti-Correa)
+      crowding          - soft-capacity crowding (De Cea-Fernandez / Cominetti-Correa)
     connectors          - zone access connector generation from coordinates
     road_interaction    - transit <-> road coupling (vehicle preload + congested times)
     from_gtfs           - GTFS pattern reconstruction (frequencies + stop_times)
@@ -318,6 +318,10 @@ macro_traffic_sim_core
 ## Parallel execution
 
 The `parallel` feature is ENABLED by default. It uses [rayon](https://docs.rs/rayon) to parallelize the most expensive steps: all-or-nothing assignment (Dijkstra per origin zone) and skim matrix computation.
+
+For transit, the route graph is *interned* once per call and every destination reuses one solver workspace (via [hyperpaths-rs](https://crates.io/crates/hyperpaths-rs) v0.2.0), so `assign_transit`, `transit_skim` and the congested/crowding equilibria avoid re-interning per destination.
+
+> **Interning, in plain terms.** The graph's nodes are named by strings (`"stop_42"`, `"L3#2"`, a centroid id, ...). "Interning" walks over every name once and assigns each a dense integer index - `"stop_42" -> 0`, `"L3#2" -> 1`, and so on - so the hot loop reads plain arrays (`labels[0]`, `labels[1]`) instead of hashing strings on every lookup. It is the same idea as turning a paper address book into numbered slots. Building that numbering is the costly part; the win is doing it **once** and reusing it for all destinations, rather than rebuilding it for each one. `assign_transit` and `transit_skim` stay single-threaded by default; opt-in parallel variants `assign_transit_par` / `transit_skim_par` fan the destinations over rayon, and the congested sweep parallelizes under this feature. For services that assign many OD matrices against a fixed network, `PreparedTransitNetwork` interns the graph once and is shared across request threads behind an `Arc`.
 
 To disable and use single-threaded execution:
 

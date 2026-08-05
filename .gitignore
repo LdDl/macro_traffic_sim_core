@@ -4,3 +4,26 @@ papers/
 # Where I do manual calculations
 iphone_photos/
 docs/
+
+# LaTeX build artifacts (papers/draft)
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+*.xdv
+*.dvi
