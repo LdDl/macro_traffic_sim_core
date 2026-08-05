@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "macro_traffic_sim_core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "csv",
